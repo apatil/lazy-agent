@@ -12,13 +12,7 @@
 ; = Utility stuff not immediately related to cells =
 ; ==================================================
 (defn agent? [x] (instance? clojure.lang.Agent x))
-
-(defn id? [x] 
-    "Checks whether x is an id: ref, value or agent"
-    (or
-        (instance? clojure.lang.IRef x)
-        (instance? clojure.lang.Agent x)
-        (instance? clojure.proxy.java.util.concurrent.atomic.AtomicReference$IRef x)))
+(defn id? [x] (instance? clojure.lang.IDeref x))
 (defn deref-or-val [x] (if (id? x) @x x))
 
 (defn map-now [fn coll] (doall (map fn coll)))
@@ -46,7 +40,7 @@
                 ; Otherwise, cons the parent.
                 (recur rest-parents (cons (deref-or-val parent) val-sofar)))))))
 
-(defn swap-agent-parent-value [val parent]
+(defn swap-id-parent-value [val parent]
     "Utility function that incorporates updated parents into a cell's
     parent value ref." 
     (let [parent-val @parent]
@@ -62,72 +56,76 @@
     parents." 
     (apply update-fn (complete-parents @agent-parent-vals parents)))
 
-(defn report-to-child [val parent agent-parents parents update-fn agent-parent-vals]
+(defn report-to-child [val parent id-parents parents update-fn id-parent-vals]
     "Called by parent-watcher when a parent either updates or reverts to
     the 'need-update' state. If a parent updates and the child cell wants
     to update, computation is performed if possible. If a parent reverts
     to the need-to-update state, the child is put into the need-to-update 
     state also."
-    (do (dosync (commute agent-parent-vals swap-agent-parent-value parent))
+    (do (dosync (commute id-parent-vals swap-id-parent-value parent))
         (if (:updating val) 
-            (if (= (count @agent-parent-vals) (count agent-parents))
-                (compute parents agent-parent-vals update-fn)
+            (if (= (count @id-parent-vals) (count id-parents))
+                (compute parents id-parent-vals update-fn)
                 val)
             (if (:needs-update val) 
                 val 
                 {:needs-update true}))))
         
 
-(defn parent-watcher [agent-parents parents update-fn agent-parent-vals]
+(defn parent-watcher [id-parents parents update-fn id-parent-vals]
     "Watches a parent cell on behalf of one of its children. This watcher 
     has access to a ref which holds the values of all the target child's 
     updated parents. It also reports parent chages to the child."
-    (fn [c p changed?]
-    (if changed?
+    (fn [cell-val p]
         (if (not (:updating @p))
-            (send c report-to-child p agent-parents parents update-fn agent-parent-vals)))))
+            (report-to-child cell-val p id-parents parents update-fn id-parent-vals)
+            cell-val)))
 
-(defn cell-watcher [cell agent-parents agent-parent-vals parents update-fn]    
+(defn cell-watcher [cell id-parents id-parent-vals agent-parents parents update-fn]    
     "Watches a non-root cell. If it changes and requests an update,
     it computes if possible. Otherwise it sends an update request to all its
     parents."
-    (let [compute-fn (fn [x] (compute parents agent-parent-vals update-fn))]
-        (fn cell-watcher [agent-parents cell changed?]
-        (if changed?
-            (if (:updating @cell)
-                (if (= (count @agent-parent-vals) (count agent-parents))
-                    (send cell compute-fn)
-                    (map-now send-update agent-parents)))))))
+    (let [compute-fn (fn [] (compute parents id-parent-vals update-fn))]
+        (fn cell-watcher [cell-val cell]
+            (if (:updating cell-val)
+                (if (= (count @id-parent-vals) (count id-parents))
+                    (compute-fn)
+                    (do 
+                        (map-now send-update agent-parents)
+                        cell-val))
+                cell-val))))
 
 (defn root-cell-watcher [cell parents update-fn]
     "Watches a root cell. If the cell changes and requests an update, 
     it is made to compute immediately."
-    (fn [parents cell changed?] 
-        (if changed?
-            (if (:updating @cell)
-                (set-agent! cell (apply update-fn (map deref-or-val parents)))))))
+    (fn [cell-val cell] 
+        (if (:updating cell-val)
+            (apply update-fn (map deref-or-val parents))
+            cell-val)))
 
 ; =======================
 ; = Cell creation stuff =
 ; =======================
 (defn updated? [c] (not (:needs-update @c)))
 (defn cell [name update-fn parents]
-    "Creates a cell (lazy auto-agent) with given update-fn and parents. 
-    Parents must be immutable or agents."
+    "Creates a cell (lazy auto-agent) with given update-fn and parents."
     (let [
         cell (agent {:needs-update true})
-        agent-parents (filter agent? parents)
-        updated-parents (filter updated? agent-parents)          
-        agent-parent-vals (ref (zipmap updated-parents (map deref updated-parents)))
-        watcher-adder (fn [p] (add-watch p cell (parent-watcher agent-parents parents update-fn agent-parent-vals)))
+        id-parents (filter id? parents)
+        agent-parents (filter agent? id-parents)
+        updated-parents (filter updated? id-parents)          
+        id-parent-vals (ref (zipmap updated-parents (map deref updated-parents)))
+        add-parent-watcher (fn [p] (add-watcher p :send cell (parent-watcher id-parents parents update-fn id-parent-vals)))
         ]
         (do
             ; Add a watcher to all the cell's parents            
-            (map-now watcher-adder agent-parents)
+            (map-now add-parent-watcher id-parents)
             (if agent-parents
                 ; Add a normal- or root-cell watcher to the cell itself.
-                (add-watch cell agent-parents (cell-watcher cell agent-parents agent-parent-vals parents update-fn))                
-                (add-watch cell parents (root-cell-watcher cell parents update-fn)))    
+                ; FIXME: Watchers must now be agents, and now watcher activations have their actions sent.
+                ; So the watcher in cell-watcher needs to be either the cell or its children.
+                (add-watcher cell :send cell (cell-watcher cell id-parents id-parent-vals agent-parents parents update-fn))                
+                (add-watcher cell :send cell (root-cell-watcher cell parents update-fn)))    
             cell)))
 
 (defmacro def-cell
@@ -143,18 +141,20 @@
 
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 
-(defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell cell-updated?]
+(defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell]
     "A watcher function that decrements a latch when a cell updates."
-    (if cell-updated?
+    (do
         (if (not (:updating @cell))
-            (.countDown latch))))
+            (.countDown latch))
+            latch))
 
 (defn evaluate [& cells]
     "Updates the cells, blocks until the computation is complete, returns their values."
     (let [        
           latch (java.util.concurrent.CountDownLatch. (count (filter (comp not updated?) cells)))
-          watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
-          watcher-remover (fn [cell] (remove-watch cell latch))
+          latch-holder (agent latch)
+          watcher-adder (fn [cell] (add-watcher cell :send latch-holder unlatching-watcher))
+          watcher-remover (fn [cell] (remove-watcher cell latch-holder))
           ]
         (do
             (map-now watcher-adder cells)            
@@ -170,8 +170,7 @@
 (defn sleeping [fun]
     (fn [& x] (do (Thread/sleep 1000) (apply fun x))))
 
-; Can't support atom or agent parents yet... but the newer add-watcher function should fix that.
-(def x (agent 10))
+(def x (atom 10))
 (def-cell a (sleeping +) [1 x])
 (def-cell b (sleeping +) [2 3])
 (def-cell c (sleeping +) [a b])
