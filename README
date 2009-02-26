@@ -4,8 +4,8 @@ February 25, 2009
 Common Public License, see LICENSE
 copyright 2009 Anand Patil
 
-Implements two types of agent-based 'cells' for Clojure: lazy-agent and oblivious-agent. These complement the auto-agents available in Clojure Contrib. Both allow for concurrent cell updates with respectably efficient scheduling and avoid unnecessarily repeating cell updates.
+Implements two types of agent-based 'cells' for Clojure: lazy agents and oblivious agents. These complement the auto-agents available in Clojure Contrib. Both allow for concurrent cell updates with respectably efficient scheduling and avoid unnecessarily repeating cell updates.
 
 When a lazy agent's ancestor changes, its value changes to {:updating true} but it does not compute its new value until it receives a message instructing it to do so. To send the update message to a group of agents, do (update a b c d e). To send the update message and wait for the values, do (evaluate a b c d e).
 
-Oblivious agents aren't implemented yet, but they will be even lazier than lazy agents. When an oblivious agent's ancestor changes, it will not do anything. When it receives a 'force-update' message, it will check its parents' status and update if necessary.
+Oblivious agents are even lazier than lazy agents. When an oblivious agent's ancestor changes, it will not do anything. When it receives a regular update message, it will also not do anything. When it receives a force-update message, it will recompute.

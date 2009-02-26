@@ -8,6 +8,7 @@
 (refer 'clojure.set)
 (set! *warn-on-reflection* true)
 
+
 ; ==================================================
 ; = Utility stuff not immediately related to cells =
 ; ==================================================
@@ -18,6 +19,7 @@
 (defn map-now [fn coll] (doall (map fn coll)))
 (defn second-arg [x y] y)
 (defn set-agent! [a v] (send a second-arg v))
+
 
 ; ==================
 ; = Updating stuff =
@@ -49,6 +51,8 @@
             (assoc val parent parent-val))))
 
 (defn updating-fn [x] (if (:needs-update x) (assoc x :updating true) x))
+(defn force-updating-fn [x] {:needs-update true :updating true})
+(defn send-force-update [p] (send p force-updating-fn))
 (defn send-update [p] "Utility function that puts p into the updating state." (send p updating-fn))
 
 (defn compute [parents agent-parent-vals update-fn] 
@@ -56,7 +60,7 @@
     parents." 
     (apply update-fn (complete-parents @agent-parent-vals parents)))
 
-(defn report-to-child [val parent id-parents parents update-fn id-parent-vals]
+(defn report-to-child [val parent id-parents parents update-fn id-parent-vals oblivious?]
     "Called by parent-watcher when a parent either updates or reverts to
     the 'need-update' state. If a parent updates and the child cell wants
     to update, computation is performed if possible. If a parent reverts
@@ -67,18 +71,18 @@
             (if (= (count @id-parent-vals) (count id-parents))
                 (compute parents id-parent-vals update-fn)
                 val)
-            (if (:needs-update val) 
+            (if (or (:needs-update val) oblivious?) 
                 val 
                 {:needs-update true}))))
         
 
-(defn parent-watcher [id-parents parents update-fn id-parent-vals]
+(defn parent-watcher [id-parents parents update-fn id-parent-vals oblivious?]
     "Watches a parent cell on behalf of one of its children. This watcher 
     has access to a ref which holds the values of all the target child's 
     updated parents. It also reports parent chages to the child."
     (fn [cell-val p]
         (if (not (:updating @p))
-            (report-to-child cell-val p id-parents parents update-fn id-parent-vals)
+            (report-to-child cell-val p id-parents parents update-fn id-parent-vals oblivious?)
             cell-val)))
 
 (defn cell-watcher [cell id-parents id-parent-vals agent-parents parents update-fn]    
@@ -103,11 +107,13 @@
             (apply update-fn (map deref-or-val parents))
             cell-val)))
 
+
 ; =======================
 ; = Cell creation stuff =
 ; =======================
+
 (defn updated? [c] (not (:needs-update @c)))
-(defn cell [name update-fn parents]
+(defn cell [name update-fn parents & [oblivious?]]
     "Creates a cell (lazy auto-agent) with given update-fn and parents."
     (let [
         cell (agent {:needs-update true})
@@ -115,24 +121,22 @@
         agent-parents (filter agent? id-parents)
         updated-parents (filter updated? id-parents)          
         id-parent-vals (ref (zipmap updated-parents (map deref updated-parents)))
-        add-parent-watcher (fn [p] (add-watcher p :send cell (parent-watcher id-parents parents update-fn id-parent-vals)))
+        add-parent-watcher (fn [p] (add-watcher p :send cell (parent-watcher id-parents parents update-fn id-parent-vals oblivious?)))
         ]
         (do
             ; Add a watcher to all the cell's parents            
             (map-now add-parent-watcher id-parents)
-            (if agent-parents
+            (if (empty? agent-parents)
                 ; Add a normal- or root-cell watcher to the cell itself.
-                ; FIXME: Watchers must now be agents, and now watcher activations have their actions sent.
-                ; So the watcher in cell-watcher needs to be either the cell or its children.
-                (add-watcher cell :send cell (cell-watcher cell id-parents id-parent-vals agent-parents parents update-fn))                
-                (add-watcher cell :send cell (root-cell-watcher cell parents update-fn)))    
+                (add-watcher cell :send cell (root-cell-watcher cell parents update-fn))
+                (add-watcher cell :send cell (cell-watcher cell id-parents id-parent-vals agent-parents parents update-fn)))    
             cell)))
 
 (defmacro def-cell
     "Creates and inters a cell in the current namespace, bound to sym,
     with given parents and update function."
-    [sym update-fn parents] 
-    `(def ~sym (cell ~@(name sym) ~update-fn ~parents)))
+    [sym update-fn parents & [oblivious?]] 
+    `(def ~sym (cell ~@(name sym) ~update-fn ~parents ~oblivious?)))
 
 
 ; =================================================
@@ -140,6 +144,7 @@
 ; =================================================
 
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
+(defn force-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-update cells))
 
 (defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell]
     "A watcher function that decrements a latch when a cell updates."
@@ -163,6 +168,7 @@
             (map-now watcher-remover cells)
             (map deref cells))))
 
+
 ; ========
 ; = Test =
 ; ========
@@ -170,13 +176,13 @@
 (defn sleeping [fun]
     (fn [& x] (do (Thread/sleep 1000) (apply fun x))))
 
-(def x (atom 10))
+(def x (agent 10))
 (def-cell a (sleeping +) [1 x])
 (def-cell b (sleeping +) [2 3])
-(def-cell c (sleeping +) [a b])
+(def-cell c (sleeping +) [a b] true)
 (def-cell d (sleeping +) [c a 3])
-(def-cell e (sleeping +) [a 2])
+(def-cell e (sleeping +) [a 2] true)
 (def-cell f (sleeping +) [c e 12])
-;
-;(time (sync-evaluate [d e f]))
-;(time (sync-evaluate [a b c d e f]))
+
+;(time (evaluate d e f))
+;(time (evaluate a b c d e f))
