@@ -74,12 +74,17 @@
                 val 
                 {:needs-update true}))))
         
+(defn watcher-to-watch [fun]
+    (fn [watcher reference old-val new-val]
+        (if (not= old-val new-val)
+            (send watcher fun reference new-val))))        
+        
 (defn parent-watcher [id-parents parents update-fn id-parent-vals oblivious?]
     "Watches a parent cell on behalf of one of its children. This watcher 
     has access to a ref which holds the values of all the target child's 
     updated parents. It also reports parent chages to the child."
-    (fn [cell-val p]
-        (if (not (:updating @p))
+    (fn [cell-val p p-val]
+        (if (not (:updating p-val))
             (report-to-child cell-val p id-parents parents update-fn id-parent-vals oblivious?)
             cell-val)))
 
@@ -117,7 +122,7 @@
         agent-parents (filter agent? id-parents)
         updated-parents (filter updated? id-parents)          
         id-parent-vals (ref (zipmap updated-parents (map deref updated-parents)))
-        add-parent-watcher (fn [p] (add-watcher p :send cell (parent-watcher id-parents parents update-fn id-parent-vals oblivious?)))
+        add-parent-watcher (fn [p] (add-watch p cell (watcher-to-watch (parent-watcher id-parents parents update-fn id-parent-vals oblivious?))))
         ]
         (do
             ; Add a watcher to all the cell's parents            
