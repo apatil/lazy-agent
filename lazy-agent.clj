@@ -143,20 +143,20 @@
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 (defn force-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-update cells))
 
-(defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell]
+(defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell old-val new-val]
     "A watcher function that decrements a latch when a cell updates."
     (do
-        (if (not (:updating @cell))
-            (.countDown latch))
+        (if (not= old-val new-val)
+            (if (not (:updating new-val))
+                (.countDown latch)))
             latch))
 
 (defn evaluate [& cells]
     "Updates the cells, blocks until the computation is complete, returns their values."
     (let [        
           latch (java.util.concurrent.CountDownLatch. (count (filter (comp not updated?) cells)))
-          latch-holder (agent latch)
-          watcher-adder (fn [cell] (add-watcher cell :send latch-holder unlatching-watcher))
-          watcher-remover (fn [cell] (remove-watcher cell latch-holder))
+          watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
+          watcher-remover (fn [cell] (remove-watch cell latch))
           ]
         (do
             (map-now watcher-adder cells)            
