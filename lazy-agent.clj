@@ -95,13 +95,13 @@
                         (send cell compute-fn)
                         (map-now send-update agent-parents)))))))
 
-(defn root-cell-watcher [cell parents update-fn]
-    "Watches a root cell. If the cell changes and requests an update, 
-    it is made to compute immediately."
-    (fn [cell-val cell] 
-        (if (:updating cell-val)
-            (apply update-fn (map deref-or-val parents))
-            cell-val)))
+;(defn root-cell-watcher [cell parents update-fn]
+;    "Watches a root cell. If the cell changes and requests an update, 
+;    it is made to compute immediately."
+;    (fn [cell-val cell] 
+;        (if (:updating cell-val)
+;            (apply update-fn (map deref-or-val parents))
+;            cell-val)))
 
 
 ; =======================
@@ -122,10 +122,11 @@
         (do
             ; Add a watcher to all the cell's parents            
             (map-now add-parent-watcher id-parents)
-            (if (empty? agent-parents)
-                ; Add a normal- or root-cell watcher to the cell itself.
-                (add-watcher cell :send cell (root-cell-watcher cell parents update-fn))
-                (add-watch cell :key (cell-watcher cell id-parents id-parent-vals agent-parents parents update-fn)))    
+            (add-watch cell :key (cell-watcher cell id-parents id-parent-vals agent-parents parents update-fn))
+            ;(if (empty? agent-parents)
+            ;    ; Add a normal- or root-cell watcher to the cell itself.
+            ;    (add-watcher cell :send cell (root-cell-watcher cell parents update-fn))
+            ;    (add-watch cell :key (cell-watcher cell id-parents id-parent-vals agent-parents parents update-fn)))    
             cell)))
 
 (defmacro def-cell
