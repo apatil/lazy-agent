@@ -50,8 +50,8 @@
         (assoc val parent parent-val)))
 
 (defn updating-fn [x] (if (:needs-update x) (assoc x :updating true) x))
-(defn force-updating-fn [x] {:needs-update true :updating true})
-(defn send-force-update [p] (send p force-updating-fn))
+(defn force-need-update-fn [x] {:needs-update true})
+(defn send-force-need-update [p] (send p force-need-update-fn))
 (defn send-update [p] "Utility function that puts p into the updating state." (send p updating-fn))
 
 (defn compute [parents agent-parent-vals update-fn] 
@@ -135,7 +135,7 @@
 ; =================================================
 
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
-(defn force-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-update cells))
+(defn force-need-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-need-update cells))
 
 (defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell old-val new-val]
     "A watcher function that decrements a latch when a cell updates."
@@ -145,16 +145,22 @@
                 (.countDown latch)))
             latch))
 
-(defn evaluate [& cells]
-    "Updates the cells, blocks until the computation is complete, returns their values."
-    (let [        
-          latch (java.util.concurrent.CountDownLatch. (count (filter (comp not updated?) cells)))
-          watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
-          watcher-remover (fn [cell] (remove-watch cell latch))
-          ]
-        (do
-            (map-now watcher-adder cells)            
-            (apply update cells)             
-            (.await latch)
-            (map-now watcher-remover cells)
-            (map deref cells))))
+(defn synchronize [async-fn]
+    "Takes any function that takes any number of cells as an argument,
+    puts the cells through the :updating state at some point, and
+    returns immediately. Returns a function that does the same thing,
+    but waits for the result and returns it."
+    (fn [& cells]
+        (let [        
+              latch (java.util.concurrent.CountDownLatch. (count (filter (comp not updated?) cells)))
+              watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
+              watcher-remover (fn [cell] (remove-watch cell latch))
+              ]
+            (do
+                (map-now watcher-adder cells)            
+                (apply async-fn cells)             
+                (.await latch)
+                (map-now watcher-remover cells)
+                (map deref cells)))))
+
+(def evaluate (synchronize update))
