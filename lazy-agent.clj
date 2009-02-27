@@ -87,15 +87,13 @@
     "Watches a non-root cell. If it changes and requests an update,
     it computes if possible. Otherwise it sends an update request to all its
     parents."
-    (let [compute-fn (fn [] (compute parents id-parent-vals update-fn))]
-        (fn cell-watcher [cell-val cell]
-            (if (:updating cell-val)
-                (if (= (count @id-parent-vals) (count id-parents))
-                    (compute-fn)
-                    (do 
-                        (map-now send-update agent-parents)
-                        cell-val))
-                cell-val))))
+    (let [compute-fn (fn [junk] (compute parents id-parent-vals update-fn))]
+        (fn cell-watcher [key cell old-val cell-val]
+            (if (not= old-val cell-val)
+                (if (:updating cell-val)
+                    (if (= (count @id-parent-vals) (count id-parents))
+                        (send cell compute-fn)
+                        (map-now send-update agent-parents)))))))
 
 (defn root-cell-watcher [cell parents update-fn]
     "Watches a root cell. If the cell changes and requests an update, 
@@ -127,7 +125,7 @@
             (if (empty? agent-parents)
                 ; Add a normal- or root-cell watcher to the cell itself.
                 (add-watcher cell :send cell (root-cell-watcher cell parents update-fn))
-                (add-watcher cell :send cell (cell-watcher cell id-parents id-parent-vals agent-parents parents update-fn)))    
+                (add-watch cell :key (cell-watcher cell id-parents id-parent-vals agent-parents parents update-fn)))    
             cell)))
 
 (defmacro def-cell
