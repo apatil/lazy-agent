@@ -5,7 +5,6 @@
 ; Good reference on scheduling: Scheduling and Automatic Parallelization.
 ; Chapter 1 covers scheduling in DAGs and is available free on Google Books.
 
-(refer 'clojure.set)
 (set! *warn-on-reflection* true)
 
 
@@ -75,7 +74,6 @@
                 val 
                 {:needs-update true}))))
         
-
 (defn parent-watcher [id-parents parents update-fn id-parent-vals oblivious?]
     "Watches a parent cell on behalf of one of its children. This watcher 
     has access to a ref which holds the values of all the target child's 

@@ -1,7 +1,7 @@
 lazy-agent.clj
 Anand Patil
 February 25, 2009
-Common Public License, see LICENSE
+Creative Commons BY-SA, see LICENSE
 copyright 2009 Anand Patil
 
 Implements two types of agent-based 'cells' for Clojure: lazy agents and oblivious agents. These complement the auto-agents available in Clojure Contrib. Both allow for concurrent cell updates with respectably efficient scheduling and avoid unnecessarily repeating cell updates.
