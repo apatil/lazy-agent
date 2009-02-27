@@ -41,13 +41,12 @@
                 ; Otherwise, cons the parent.
                 (recur rest-parents (cons (deref-or-val parent) val-sofar)))))))
 
-(defn swap-id-parent-value [val parent]
+(defn swap-id-parent-value [val parent parent-val]
     "Utility function that incorporates updated parents into a cell's
     parent value ref." 
-    (let [parent-val @parent]
-        (if (:needs-update parent-val) 
-            (dissoc val parent)
-            (assoc val parent parent-val))))
+    (if (:needs-update parent-val) 
+        (dissoc val parent)
+        (assoc val parent parent-val)))
 
 (defn updating-fn [x] (if (:needs-update x) (assoc x :updating true) x))
 (defn force-updating-fn [x] {:needs-update true :updating true})
@@ -59,13 +58,13 @@
     parents." 
     (apply update-fn (complete-parents @agent-parent-vals parents)))
 
-(defn report-to-child [val parent id-parents parents update-fn id-parent-vals oblivious?]
+(defn report-to-child [val parent parent-val id-parents parents update-fn id-parent-vals oblivious?]
     "Called by parent-watcher when a parent either updates or reverts to
     the 'need-update' state. If a parent updates and the child cell wants
     to update, computation is performed if possible. If a parent reverts
     to the need-to-update state, the child is put into the need-to-update 
     state also."
-    (do (dosync (commute id-parent-vals swap-id-parent-value parent))
+    (do (dosync (commute id-parent-vals swap-id-parent-value parent parent-val))
         (if (:updating val) 
             (if (= (count @id-parent-vals) (count id-parents))
                 (compute parents id-parent-vals update-fn)
@@ -75,6 +74,8 @@
                 {:needs-update true}))))
         
 (defn watcher-to-watch [fun]
+    "Converts an 'old-style' watcher function to a new synchronous watch.
+    The watcher is used as the key of the new watch."
     (fn [watcher reference old-val new-val]
         (if (not= old-val new-val)
             (send watcher fun reference new-val))))        
@@ -85,7 +86,7 @@
     updated parents. It also reports parent chages to the child."
     (fn [cell-val p p-val]
         (if (not (:updating p-val))
-            (report-to-child cell-val p id-parents parents update-fn id-parent-vals oblivious?)
+            (report-to-child cell-val p p-val id-parents parents update-fn id-parent-vals oblivious?)
             cell-val)))
 
 (defn cell-watcher [cell id-parents id-parent-vals agent-parents parents update-fn]    
