@@ -11,13 +11,13 @@
 ;(defmacro test [key val] `(def (symbol ~(name key)) val))
 ; TODO: Agent value should be {:value :status} struct. Tack everything else to that as metadata if possible. maybe metaata can be structmaps. Statuses should be :up-to-date, :needs-update, :oblivious and :updating.
 
-(defmacro struct-and-accessors [sym & slots]
-    (let [slot-to-sym (fn [slot] (symbol (format "%s-%s" (name sym) (name slot))))
-            slot-syms (map slot-to-sym slots)]
-        `(do
-            (defstruct ~sym ~@slots)
-            (for [slot-sym# ~slot-syms slot# ~slots] 
-                (def slot-sym# (accessor ~sym slot#))))))
+;(defmacro struct-and-accessors [sym & slots]
+;    (let [slot-to-sym (fn [slot] (symbol (format "%s-%s" (name sym) (name slot))))
+;            slot-syms (map slot-to-sym slots)]
+;        `(do
+;            (defstruct ~sym ~@slots)
+;            (for [slot-sym# ~slot-syms slot# ~slots] 
+;                (def slot-sym# (accessor ~sym slot#))))))
 
 
 ; ==================================================
@@ -85,6 +85,8 @@
                     ; Otherwise, cons the parent.
                     (recur rest-parents (cons (deref-or-val parent) val-sofar)))))))
 
+; TODO: compute-cell-value shouldn't doubly examine the metadata when called by
+; report-to-child.
 (defn compute-cell-value [cur-val]
     "Can be sent to a cell when its id-parent-vals are complete to compute its value."
     (let [cur-meta (meta cur-val)
@@ -104,8 +106,7 @@
     (if (needs-update? parent-val) 
         (dissoc val parent)
         (assoc val parent parent-val)))
-;(swap-id-parent-value (-> c deref meta cell-meta-id-parent-vals) a (struct cell-val 5 :up-to-date))
-;(report-to-child @c a (struct cell-val 5 :up-to-date))
+
 (defn report-to-child [cur-val parent parent-val]
     "Called by parent-watcher when a parent either updates or reverts to
     the 'need-update' state. If a parent updates and the child cell wants
