@@ -11,7 +11,7 @@
 ; ==================================================
 ; = Utility stuff not immediately related to cells =
 ; ==================================================
-(ns lazy-agent)
+;(ns lazy-agent)
 (defn agent? [x] (instance? clojure.lang.Agent x))
 (defn id? [x] (instance? clojure.lang.IDeref x))
 (defn deref-or-val [x] (if (id? x) @x x))
@@ -20,26 +20,26 @@
 ; =============================
 ; = Structmap for cell values =
 ; =============================
-; TODO: macro for struct with full accessor
 (defstruct cell-val :value :status)
 (def cell-value (accessor cell-val :value))
 (def cell-status (accessor cell-val :status))
 (def deref-cell (comp cell-value deref))
 
-(defstruct cell-meta :agent-parents :id-parent-vals :id-parents :parents :fn :oblivious?)
+(defstruct cell-meta :agent-parents :id-parent-vals :id-parents :parents :fn :oblivious? :lazy-agent)
 (def cell-meta-agent-parents (accessor cell-meta :agent-parents))
 (def cell-meta-id-parent-vals (accessor cell-meta :id-parent-vals))
 (def cell-meta-id-parents (accessor cell-meta :id-parents))
 (def cell-meta-parents (accessor cell-meta :parents))
 (def cell-meta-fn (accessor cell-meta :fn))
 (def cell-meta-oblivious? (accessor cell-meta :oblivious?))
+(defn is-lazy-agent? [x] (-> x deref meta :lazy-agent))
 
 ; TODO: Eliminate updating? and needs-update? calls on non-cell values,
 ; so you can go back to using the accessor functions for those.
 (defn up-to-date? [cell] (= :up-to-date (cell-status cell)))
 (defn oblivious? [cell] (= :oblivious (cell-status cell)))
-(defn updating? [cell-val] (= :updating (:status cell-val)))
-(defn needs-update? [cell] (= :needs-update (:status cell)))
+(defn updating? [cell-val] (= :updating (cell-status cell-val)))
+(defn needs-update? [cell] (= :needs-update (cell-status cell)))
 (defn second-arg [x y] y)
 (defn set-agent! [a v] (send a second-arg v))
 (defn set-cell! [c v] (send c (fn [x] (struct cell-val :value v :status :up-to-date))))
@@ -88,21 +88,23 @@
     ] 
         (with-meta (struct cell-val new-val new-status) cur-meta)))
         
-(defn swap-id-parent-value [val parent parent-val]
+(defn swap-id-parent-value [val parent parent-val lazy-agent?]
     "Utility function that incorporates updated parents into a cell's
     parent value ref." 
-    (if (needs-update? parent-val) 
-        (dissoc val parent)
+    (if lazy-agent?
+        (if (needs-update? parent-val) 
+            (dissoc val parent)
+            (assoc val parent parent-val))
         (assoc val parent parent-val)))
 
-(defn report-to-child [cur-val parent parent-val]
+(defn report-to-child [cur-val parent parent-val & lazy-agent?]
     "Called by parent-watcher when a parent either updates or reverts to
     the 'need-update' state. If a parent updates and the child cell wants
     to update, computation is performed if possible. If a parent reverts
     to the need-to-update state, the child is put into the need-to-update 
     state also."
     (let [cur-meta (meta cur-val)
-            new-id-parent-vals (swap-id-parent-value (cell-meta-id-parent-vals cur-meta) parent parent-val)
+            new-id-parent-vals (swap-id-parent-value (cell-meta-id-parent-vals cur-meta) parent parent-val lazy-agent?)
             new-meta (assoc cur-meta :id-parent-vals new-id-parent-vals)
             id-parents (cell-meta-id-parents new-meta)
             update-fn (cell-meta-fn new-meta)
@@ -127,9 +129,8 @@
     has access to a ref which holds the values of all the target child's 
     updated parents. It also reports parent chages to the child."
         (if (not (updating? p-val))
-            (report-to-child cur-val p p-val)
+            (report-to-child cur-val p p-val true)
             cur-val))
-
 
 (defn cell-watch [key cell old-val cell-val]
     "Watches a non-root cell. If it changes and requests an update,
@@ -159,8 +160,9 @@
         id-parent-vals (zipmap updated-parents (map deref updated-parents))
         cell (agent (with-meta
                         (struct cell-val nil :needs-update)
-                        (struct cell-meta agent-parents id-parent-vals id-parents parents update-fn oblivious?)))        
-        add-parent-watcher (fn [p] (add-watch p cell (watcher-to-watch parent-watcher)))
+                        (struct cell-meta agent-parents id-parent-vals id-parents parents update-fn oblivious? true)))        
+        add-parent-watcher (fn [p] (add-watch p cell (watcher-to-watch 
+                                (if (is-lazy-agent? p) parent-watcher report-to-child))))
         ]
         (do
             ; Add a watcher to all the cell's parents
