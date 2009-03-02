@@ -23,6 +23,7 @@
 (defstruct cell-val :value :status)
 (def cell-value (accessor cell-val :value))
 (def cell-status (accessor cell-val :status))
+(def needs-update-value (struct cell-val nil :needs-update))
 (def deref-cell (comp cell-value deref))
 
 (defstruct cell-meta :agent-parents :id-parent-vals :id-parents :parents :fn :oblivious? :lazy-agent)
@@ -47,7 +48,6 @@
 ; ==================
 
 (defn updating-fn [x] (if (needs-update? x) (assoc x :status :updating) x))
-(def needs-update-value (struct cell-val nil :needs-update))
 (defn force-need-update-fn [x] (with-meta needs-update-value (meta x)))
 (defn send-force-need-update [p] "Utility function that puts p into the needs-update state, even if p is oblivious." (send p force-need-update-fn))
 (defn send-update [p] "Utility function that puts p into the updating state if it needs an update." (send p updating-fn))
