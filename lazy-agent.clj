@@ -47,7 +47,7 @@
 ; ==================
 
 (defn updating-fn [x] (if (needs-update? x) (assoc x :status :updating) x))
-(defn force-need-update-fn [x] (assoc x :status :needs-update))
+(defn force-need-update-fn [x] (assoc x :status :needs-update :value nil))
 (defn send-force-need-update [p] (send p force-need-update-fn))
 (defn send-update [p] "Utility function that puts p into the updating state." (send p updating-fn))
 
@@ -73,9 +73,12 @@
 
 ; TODO: compute-cell-value shouldn't doubly examine the metadata when called by
 ; report-to-child.
-(defn compute-cell-value [cur-val cur-meta parents id-parent-vals update-fn oblivious?]
+(defn compute-cell-value [cur-val cur-meta id-parent-vals]
     "Can be sent to a cell when its id-parent-vals are complete to compute its value."
-    (let [new-parents (complete-parents id-parent-vals parents)
+    (let [parents (cell-meta-parents cur-meta)
+        update-fn (cell-meta-fn cur-meta)
+        oblivious? (cell-meta-oblivious? cur-meta)
+        new-parents (complete-parents id-parent-vals parents)
         new-val (apply update-fn new-parents)
         new-status (if oblivious? :oblivious :up-to-date)
         ] 
@@ -103,7 +106,7 @@
             new-val (with-meta cur-val new-meta)] 
         (if (updating? new-val) 
             (if (= (count new-id-parent-vals) (count id-parents))
-                (compute-cell-value new-val new-meta (cell-meta-parents new-meta) new-id-parent-vals (cell-meta-fn new-meta) (cell-meta-oblivious? new-meta))
+                (compute-cell-value new-val new-meta new-id-parent-vals)
                 new-val)
             (if (or (needs-update? new-val) (oblivious? new-val)) 
                 new-val
@@ -131,11 +134,12 @@
     (if (not= old-val cell-val)
         (if (updating? cell-val)
             (let [cell-meta (meta cell-val)
-                    num-id-parent-vals (-> cell-meta cell-meta-id-parent-vals count)
+                    id-parent-vals (cell-meta-id-parent-vals cell-meta)
+                    num-id-parent-vals (count id-parent-vals)
                     num-id-parents (-> cell-meta cell-meta-id-parents count)
                     agent-parents (cell-meta-agent-parents cell-meta)]
                 (if (=  num-id-parent-vals num-id-parents)
-                (send cell compute-cell-value)
+                (send cell compute-cell-value cell-meta id-parent-vals)
                 (map-now send-update agent-parents))))))
 
 ; =======================
