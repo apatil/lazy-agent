@@ -8,18 +8,6 @@
 
 (set! *warn-on-reflection* true)
 
-;(defmacro test [key val] `(def (symbol ~(name key)) val))
-; TODO: Agent value should be {:value :status} struct. Tack everything else to that as metadata if possible. maybe metaata can be structmaps. Statuses should be :up-to-date, :needs-update, :oblivious and :updating.
-
-;(defmacro struct-and-accessors [sym & slots]
-;    (let [slot-to-sym (fn [slot] (symbol (format "%s-%s" (name sym) (name slot))))
-;            slot-syms (map slot-to-sym slots)]
-;        `(do
-;            (defstruct ~sym ~@slots)
-;            (for [slot-sym# ~slot-syms slot# ~slots] 
-;                (def slot-sym# (accessor ~sym slot#))))))
-
-
 ; ==================================================
 ; = Utility stuff not immediately related to cells =
 ; ==================================================
