@@ -11,7 +11,7 @@
 ; ==================================================
 ; = Utility stuff not immediately related to cells =
 ; ==================================================
-;(ns lazy-agent)
+(ns lazy-agent)
 (defn agent? [x] (instance? clojure.lang.Agent x))
 (defn id? [x] (instance? clojure.lang.IDeref x))
 (defn deref-or-val [x] (if (id? x) @x x))
@@ -47,14 +47,15 @@
 ; ==================
 
 (defn updating-fn [x] (if (needs-update? x) (assoc x :status :updating) x))
-(defn force-need-update-fn [x] (assoc x :status :needs-update :value nil))
+(def needs-update-value (struct cell-val nil :needs-update))
+(defn force-need-update-fn [x] (with-meta needs-update-value (meta x)))
 (defn send-force-need-update [p] "Utility function that puts p into the needs-update state, even if p is oblivious." (send p force-need-update-fn))
 (defn send-update [p] "Utility function that puts p into the updating state if it needs an update." (send p updating-fn))
 
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 (defn force-need-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-need-update cells))
 
-; TODO: Eliminate if in extract-id-val, deref-or-val in complete-parents and if lazy-agent? in swap-id-parent-value
+; TODO: Eliminate if in extract-id-val and if lazy-agent? in swap-id-parent-value, and make complete-parents less check-ish.
 
 (defn extract-id-val [id-val]
     "Gets the value out of id-val, whether it's a cell value struct or just a plain object."
@@ -75,7 +76,7 @@
                     ; If value has a key corresponding to this parent, cons the corresponding value
                     (recur rest-parents (cons (extract-id-val this-val) val-sofar))
                     ; Otherwise, cons the parent.
-                    (recur rest-parents (cons (deref-or-val parent) val-sofar)))))))
+                    (recur rest-parents (cons parent val-sofar)))))))
 
 ; TODO: compute-cell-value shouldn't doubly examine the metadata when called by
 ; report-to-child.
@@ -123,7 +124,7 @@
             (if (or (needs-update? new-val) (oblivious? new-val)) 
                 new-val
                 ; Otherwise put it into the needs-update state.
-                (with-meta (struct cell-val nil :needs-update) new-meta)))))
+                (with-meta needs-update-value new-meta)))))
 ;        
 (defn watcher-to-watch [fun]
     "Converts an 'old-style' watcher function to a new synchronous watch.
@@ -171,7 +172,7 @@
         updated-parents (filter updated? id-parents)          
         id-parent-vals (zipmap updated-parents (map deref updated-parents))
         cell (agent (with-meta
-                        (struct cell-val nil :needs-update)
+                        needs-update-value
                         (struct cell-meta agent-parents id-parent-vals id-parents parents update-fn oblivious? true)))        
         add-parent-watcher (fn [p] (add-watch p cell (watcher-to-watch 
                                 (if (is-lazy-agent? p) parent-watcher report-to-child))))
