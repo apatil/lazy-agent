@@ -34,8 +34,6 @@
 (def cell-meta-oblivious? (accessor cell-meta :oblivious?))
 (defn is-lazy-agent? [x] (-> x deref meta :lazy-agent))
 
-; TODO: Eliminate updating? and needs-update? calls on non-cell values,
-; so you can go back to using the accessor functions for those.
 (defn up-to-date? [cell] (= :up-to-date (cell-status cell)))
 (defn oblivious? [cell] (= :oblivious (cell-status cell)))
 (defn updating? [cell-val] (= :updating (cell-status cell-val)))
@@ -75,17 +73,12 @@
 
 ; TODO: compute-cell-value shouldn't doubly examine the metadata when called by
 ; report-to-child.
-(defn compute-cell-value [cur-val]
+(defn compute-cell-value [cur-val cur-meta parents id-parent-vals update-fn oblivious?]
     "Can be sent to a cell when its id-parent-vals are complete to compute its value."
-    (let [cur-meta (meta cur-val)
-        parents (cell-meta-parents cur-meta)
-        id-parent-vals (cell-meta-id-parent-vals cur-meta)
-        update-fn (cell-meta-fn cur-meta)
-        new-parents (complete-parents id-parent-vals parents)
+    (let [new-parents (complete-parents id-parent-vals parents)
         new-val (apply update-fn new-parents)
-        oblivious? (cell-meta-oblivious? cur-meta)
         new-status (if oblivious? :oblivious :up-to-date)
-    ] 
+        ] 
         (with-meta (struct cell-val new-val new-status) cur-meta)))
         
 (defn swap-id-parent-value [val parent parent-val lazy-agent?]
@@ -107,11 +100,10 @@
             new-id-parent-vals (swap-id-parent-value (cell-meta-id-parent-vals cur-meta) parent parent-val lazy-agent?)
             new-meta (assoc cur-meta :id-parent-vals new-id-parent-vals)
             id-parents (cell-meta-id-parents new-meta)
-            update-fn (cell-meta-fn new-meta)
             new-val (with-meta cur-val new-meta)] 
         (if (updating? new-val) 
             (if (= (count new-id-parent-vals) (count id-parents))
-                (compute-cell-value new-val)
+                (compute-cell-value new-val new-meta (cell-meta-parents new-meta) new-id-parent-vals (cell-meta-fn new-meta) (cell-meta-oblivious? new-meta))
                 new-val)
             (if (or (needs-update? new-val) (oblivious? new-val)) 
                 new-val
