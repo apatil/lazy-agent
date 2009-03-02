@@ -33,7 +33,8 @@
 (def cell-meta-parents (accessor cell-meta :parents))
 (def cell-meta-fn (accessor cell-meta :fn))
 (def cell-meta-oblivious? (accessor cell-meta :oblivious?))
-(defn is-lazy-agent? [x] (-> x deref meta :lazy-agent))
+(def cell-meta-lazy-agent (accessor cell-meta :lazy-agent))
+(defn is-lazy-agent? [x] (-> x deref meta cell-meta-lazy-agent))
 
 (defn up-to-date? [cell] (= :up-to-date (cell-status cell)))
 (defn oblivious? [cell] (= :oblivious (cell-status cell)))
@@ -55,7 +56,11 @@
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 (defn force-need-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-need-update cells))
 
-; TODO: Eliminate if in extract-id-val and if lazy-agent? in swap-id-parent-value, and make complete-parents less check-ish.
+; TODO: Possibly eliminate if in extract-id-val and if lazy-agent? in swap-id-parent-value, and make complete-parents less check-ish. 
+; TODO: Make functions for altering parents.
+; TODO: Propagate exceptions.
+
+
 
 (defn extract-id-val [id-val]
     "Gets the value out of id-val, whether it's a cell value struct or just a plain object."
@@ -78,8 +83,6 @@
                     ; Otherwise, cons the parent.
                     (recur rest-parents (cons parent val-sofar)))))))
 
-; TODO: compute-cell-value shouldn't doubly examine the metadata when called by
-; report-to-child.
 (defn compute-cell-value [cur-val cur-meta id-parent-vals]
     "Can be sent to a cell when its id-parent-vals are complete to compute its value."
     (let [parents (cell-meta-parents cur-meta)
@@ -106,9 +109,9 @@
 
 (defn report-to-child [cur-val parent parent-val & lazy-agent?]
     "Called by parent-watcher when a parent either updates or reverts to
-    the 'need-update' state. If a parent updates and the child cell wants
+    the 'needs-update' state. If a parent updates and the child cell wants
     to update, computation is performed if possible. If a parent reverts
-    to the need-to-update state, the child is put into the need-to-update 
+    to the needs-update state, the child is put into the needs-update 
     state also."
     (let [cur-meta (meta cur-val)
             new-id-parent-vals (swap-id-parent-value (cell-meta-id-parent-vals cur-meta) parent parent-val lazy-agent?)
@@ -190,11 +193,9 @@
     [sym update-fn parents & [oblivious?]] 
     `(def ~sym (cell ~@(name sym) ~update-fn ~parents ~oblivious?)))
 
-
 ; =======================================
 ; = Synchronized multi-cell evaluations =
 ; =======================================
-
 
 (defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell old-val new-val]
     "A watcher function that decrements a latch when a cell updates."
