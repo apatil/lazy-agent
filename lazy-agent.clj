@@ -34,7 +34,7 @@
 (def cell-meta-fn (accessor cell-meta :fn))
 (def cell-meta-oblivious? (accessor cell-meta :oblivious?))
 (def cell-meta-lazy-agent (accessor cell-meta :lazy-agent))
-(defn is-lazy-agent? [x] (-> x deref meta cell-meta-lazy-agent))
+(defn is-lazy-agent? [x] (-> x deref meta :lazy-agent))
 
 (defn up-to-date? [cell] (= :up-to-date (cell-status cell)))
 (defn oblivious? [cell] (= :oblivious (cell-status cell)))
@@ -56,7 +56,7 @@
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 (defn force-need-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-need-update cells))
 
-; TODO: Possibly eliminate if in extract-id-val and if lazy-agent? in swap-id-parent-value, and make complete-parents less check-ish. 
+; TODO: Make complete-parents less check-ish. 
 ; TODO: Make functions for altering parents.
 ; TODO: Propagate exceptions.
 
@@ -79,7 +79,7 @@
                 ]
                 (if this-val
                     ; If value has a key corresponding to this parent, cons the corresponding value
-                    (recur rest-parents (cons (extract-id-val this-val) val-sofar))
+                    (recur rest-parents (cons this-val val-sofar))
                     ; Otherwise, cons the parent.
                     (recur rest-parents (cons parent val-sofar)))))))
 
@@ -95,39 +95,48 @@
         ; Create new value, preserving metadata, and put cell in either up-to-date or oblivious state.
         (with-meta (struct cell-val new-val new-status) cur-meta)))
         
-(defn swap-id-parent-value [val parent parent-val lazy-agent?]
+(defn swap-la-parent-value [parent-val-map parent parent-val]
     "Utility function that incorporates updated parents into a cell's
     parent value ref." 
-    (if lazy-agent?
-        ; If the parent is a lazy agent, check whether it's switched into the 
-        ; needs update state, otherwise record its new value.
-        (if (needs-update? parent-val) 
-            (dissoc val parent)
-            (assoc val parent parent-val))
-        ; Otherwise, just record its new value.
-        (assoc val parent parent-val)))
+    ; If the parent is a lazy agent, check whether it's switched into the 
+    ; needs update state, otherwise record its new value.
+    (if (needs-update? parent-val) 
+        (dissoc parent-val-map parent)
+        (assoc parent-val-map parent (:value parent-val))))
 
-(defn report-to-child [cur-val parent parent-val & lazy-agent?]
+(defn swap-id-parent-value [parent-val-map parent parent-val]
+    ; Otherwise, just record its new value.
+    (assoc parent-val-map parent parent-val))
+
+(defn reaction [new-val new-meta]
+    ; If the child is not oblivious, put it in the needs-update state.
+    (if (needs-update? new-val) new-val (with-meta needs-update-value new-meta)))
+    
+(defn oblivious-reaction [new-val new-meta]
+    ; If the child is oblivious, leave it alone.
+    new-val)
+
+(defn report-to-child [parent-lazy-agent? oblivious?]
     "Called by parent-watcher when a parent either updates or reverts to
     the 'needs-update' state. If a parent updates and the child cell wants
     to update, computation is performed if possible. If a parent reverts
     to the needs-update state, the child is put into the needs-update 
     state also."
-    (let [cur-meta (meta cur-val)
-            new-id-parent-vals (swap-id-parent-value (cell-meta-id-parent-vals cur-meta) parent parent-val lazy-agent?)
-            new-meta (assoc cur-meta :id-parent-vals new-id-parent-vals)
-            new-val (with-meta cur-val new-meta)] 
-        ; If the child is updating, check whether it's ready to compute.
-        (if (updating? new-val) 
-            (if (= (count new-id-parent-vals) (count (cell-meta-id-parents new-meta)))
-                ; Compute if possible, otherwise do nothing.
-                (compute-cell-value new-val new-meta new-id-parent-vals)
-                new-val)
-            ; If the child is not ready to compute, and needs an update or is oblivious, leave it alone.
-            (if (or (needs-update? new-val) (oblivious? new-val)) 
-                new-val
-                ; Otherwise put it into the needs-update state.
-                (with-meta needs-update-value new-meta)))))
+    (let [swap-fn (if parent-lazy-agent? swap-la-parent-value swap-id-parent-value)
+            react-fn (if oblivious? oblivious-reaction reaction)]
+        (fn [cur-val parent parent-val]
+            (let [cur-meta (meta cur-val)
+                new-id-parent-vals (swap-fn (cell-meta-id-parent-vals cur-meta) parent parent-val)
+                new-meta (assoc cur-meta :id-parent-vals new-id-parent-vals)
+                new-val (with-meta cur-val new-meta)] 
+            ; If the child is updating, check whether it's ready to compute.
+            (if (updating? new-val) 
+                (if (= (count new-id-parent-vals) (count (cell-meta-id-parents new-meta)))
+                    ; Compute if possible, otherwise do nothing.
+                    (compute-cell-value new-val new-meta new-id-parent-vals)
+                    new-val)
+                ; React to the new value.
+                (react-fn new-val new-meta))))))
 ;        
 (defn watcher-to-watch [fun]
     "Converts an 'old-style' watcher function to a new synchronous watch.
@@ -136,13 +145,15 @@
         (if (not= old-val new-val)
             (send watcher fun reference new-val))))        
 
-(defn parent-watcher [cur-val p p-val]
+(defn parent-watcher [oblivious?]
     "Watches a parent cell on behalf of one of its children. This watcher 
     has access to a ref which holds the values of all the target child's 
     updated parents. It also reports parent chages to the child."
-        (if (not (updating? p-val))
-            (report-to-child cur-val p p-val true)
-            cur-val))
+    (let [report (report-to-child true oblivious?)]
+        (fn [cur-val p p-val]
+            (if (not (updating? p-val))
+                (report cur-val p p-val)
+                cur-val))))
 
 (defn cell-watch [key cell old-val cell-val]
     "Watches a non-root cell. If it changes and requests an update,
@@ -178,7 +189,7 @@
                         needs-update-value
                         (struct cell-meta agent-parents id-parent-vals id-parents parents update-fn oblivious? true)))        
         add-parent-watcher (fn [p] (add-watch p cell (watcher-to-watch 
-                                (if (is-lazy-agent? p) parent-watcher report-to-child))))
+                                (if (is-lazy-agent? p) (parent-watcher oblivious?) (report-to-child false oblivious?)))))
         ]
         (do
             ; Add a watcher to all the cell's parents
