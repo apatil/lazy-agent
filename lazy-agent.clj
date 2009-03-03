@@ -56,7 +56,6 @@
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 (defn force-need-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-need-update cells))
 
-; TODO: Make complete-parents less check-ish. 
 ; TODO: Make functions for altering parents.
 ; TODO: Propagate exceptions.
         
@@ -68,11 +67,10 @@
         (if (empty? parents-sofar) val-sofar
             (let [parent (last parents-sofar) 
                 rest-parents (butlast parents-sofar) 
-                this-val (parent-val-map parent)
                 ]
-                (if this-val
+                (if (id? parent)
                     ; If value has a key corresponding to this parent, cons the corresponding value
-                    (recur rest-parents (cons this-val val-sofar))
+                    (recur rest-parents (cons (parent-val-map parent) val-sofar))
                     ; Otherwise, cons the parent.
                     (recur rest-parents (cons parent val-sofar)))))))
 
@@ -199,12 +197,19 @@
 ; =======================================
 ; = Synchronized multi-cell evaluations =
 ; =======================================
+(defn not-waiting? [cell-val] 
+    "Determines whether a cell is either up-to-date or oblivious."
+    (let [status (cell-status cell-val)]
+        (or 
+            (= :up-to-date status) 
+            (= :oblivious status))))
+
 
 (defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell old-val new-val]
     "A watcher function that decrements a latch when a cell updates."
     (do
         (if (not= old-val new-val)
-            (if (up-to-date? new-val)
+            (if (not-waiting? new-val)
                 (.countDown latch)))
             latch))
 
@@ -215,7 +220,7 @@
     but waits for the result and returns it."
     (fn [& cells]
         (let [        
-              latch (java.util.concurrent.CountDownLatch. (count (filter (comp not up-to-date? deref) cells)))
+              latch (java.util.concurrent.CountDownLatch. (count (filter (comp not not-waiting? deref) cells)))
               watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
               watcher-remover (fn [cell] (remove-watch cell latch))
               ]
