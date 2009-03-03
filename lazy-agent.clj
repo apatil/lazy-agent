@@ -97,13 +97,9 @@
     ; Otherwise, just record its new value.
     (assoc parent-val-map parent parent-val))
 
-(defn reaction [new-val new-meta]
+(defn reaction [val meta]
     ; If the child is not oblivious, put it in the needs-update state.
-    (if (needs-update? new-val) new-val (with-meta needs-update-value new-meta)))
-    
-(defn oblivious-reaction [new-val new-meta]
-    ; If the child is oblivious, leave it alone.
-    new-val)
+    (with-meta (if (needs-update? val) val needs-update-value) meta))
 
 (defn report-to-child [parent-lazy-agent? oblivious?]
     "Called by parent-watcher when a parent either updates or reverts to
@@ -112,21 +108,20 @@
     to the needs-update state, the child is put into the needs-update 
     state also."
     (let [swap-fn (if parent-lazy-agent? swap-la-parent-value swap-id-parent-value)
-            react-fn (if oblivious? oblivious-reaction reaction)
+            react-fn (if oblivious? with-meta reaction)
             updated-status (if oblivious? :oblivious :up-to-date)]
         (fn [cur-val parent parent-val]
             (let [cur-meta (meta cur-val)
                 new-id-parent-vals (swap-fn (cell-meta-id-parent-vals cur-meta) parent parent-val)
-                new-meta (assoc cur-meta :id-parent-vals new-id-parent-vals)
-                new-val (with-meta cur-val new-meta)] 
+                new-meta (assoc cur-meta :id-parent-vals new-id-parent-vals)] 
             ; If the child is updating, check whether it's ready to compute.
-            (if (updating? new-val) 
+            (if (updating? cur-val) 
                 (if (= (count new-id-parent-vals) (cell-meta-n-id-parents new-meta))
                     ; Compute if possible, otherwise do nothing.
-                    (compute-cell-value new-val new-meta new-id-parent-vals updated-status)
-                    new-val)
+                    (compute-cell-value cur-val new-meta new-id-parent-vals updated-status)
+                    (with-meta cur-val new-meta))
                 ; React to the new value.
-                (react-fn new-val new-meta))))))
+                (react-fn cur-val new-meta))))))
 ;        
 (defn watcher-to-watch [fun]
     "Converts an 'old-style' watcher function to a new synchronous watch.
