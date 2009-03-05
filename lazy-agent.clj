@@ -27,7 +27,7 @@
 (defn agent? [x] (instance? clojure.lang.Agent x))
 (defn id? [x] (instance? clojure.lang.IDeref x))
 (defn deref-or-val [x] (if (id? x) @x x))
-(defn map-now [fn coll] (doall (map fn coll)))
+(defn map-now [fn coll] (dorun (map fn coll)))
 
 ; ============================================
 ; = Structmaps and accessors for cell values =
