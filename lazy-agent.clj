@@ -263,7 +263,7 @@
         agent-parents (conditional-set-replace (cell-meta-agent-parents old-meta) old-parent new-parent old-agent? new-agent?)
         id-parent-vals (conditional-map-replace (cell-meta-id-parent-vals old-meta) old-parent new-parent old-id? new-id?)
         n-id-parents (conditional-counter-change (cell-meta-n-id-parents old-meta) old-id? new-id?)]
-    (with-meta needs-update-value 
+    (with-meta (if (= (cell-status cell-val) :oblivious) cell-val needs-update-value)
         (assoc old-meta 
             :parents parents
             :agent-parents agent-parents 
@@ -271,10 +271,14 @@
             :n-id-parents n-id-parents))))
             
 (defn replace-parent [cell old-parent new-parent]
-    "Replaces a cell's parent."
+    "Replaces a cell's parent. Sets the cell's value to needs-update, or leaves
+    it unchanged if the cell is oblivious."
     (do 
+        ; Remove old watcher
         (remove-watch old-parent cell)                                                            
-        (send cell replace-parent-msg old-parent new-parent)                                      
+        ; Tell the cell to update its metadata and go into the needs-update state if not oblivious.
+        (send cell replace-parent-msg old-parent new-parent)                      
+        ; Add new watcher.                
         (add-watch new-parent cell 
             (watcher-to-watch 
                 (let [oblivious? (-> cell deref meta cell-meta-oblivious?)]
