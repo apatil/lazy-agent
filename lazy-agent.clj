@@ -66,7 +66,7 @@
 (defn send-update [p] "Utility function that puts p into the updating state if it needs an update." (send p updating-fn))
 
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
-(defn force-need-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-need-update cells))
+(defn force-need-update [& cells] "Asynchronously puts the cells in :needs-update and returns immediately."(map-now send-force-need-update cells))
         
 (defn complete-parents [parent-val-map parents]
     "Takes a map of the form {parent @parent}, and a list of mutable and
@@ -216,25 +216,32 @@
             latch))
 
 (def cell-waiting? (comp not not-waiting? deref))
-(defn synchronize [async-fn]
-    "Takes any function that takes any number of cells as an argument,
-    puts the cells through the :updating state at some point, and
-    returns immediately. Returns a function that does the same thing,
-    but waits for the result and returns it."
-    (fn [& cells]
-        (let [        
-              latch (java.util.concurrent.CountDownLatch. (count (filter cell-waiting? cells)))
-              watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
-              watcher-remover (fn [cell] (remove-watch cell latch))]
-            (do
-                (map-now watcher-adder cells)            
-                (apply async-fn cells)             
-                (.await latch)
-                (map-now watcher-remover cells)
-                (map deref-cell cells)))))
+(defn evaluate [& cells]
+    "Updates the cells, waits for them to compute, and returns their values."
+    (let [        
+          latch (java.util.concurrent.CountDownLatch. (count (filter cell-waiting? cells)))
+          watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
+          watcher-remover (fn [cell] (remove-watch cell latch))]
+        (do
+            (map-now watcher-adder cells)            
+            (apply update cells)             
+            (.await latch)
+            (map-now watcher-remover cells)
+            (map deref-cell cells))))
+
+(defn force-update [& cells]
+    "Forces the cells to update and returns them immediately."
+    (do
+        (apply force-need-update cells)
+        (await)
+        (apply update cells)))
                 
-(def evaluate (synchronize update))
-(def force-evaluate (synchronize (comp force-need-update update)))
+(defn force-evaluate [& cells]
+    "Forces the cells to update, waits for them and returns their values."
+    (do 
+        (apply force-need-update cells)
+        (await)
+        (apply evaluate cells)))
 
 ; ============================
 ; = Change cell dependencies =
