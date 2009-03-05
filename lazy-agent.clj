@@ -233,14 +233,14 @@
     "Forces the cells to update and returns them immediately."
     (do
         (apply force-need-update cells)
-        (await)
+        (apply await cells)
         (apply update cells)))
                 
 (defn force-evaluate [& cells]
     "Forces the cells to update, waits for them and returns their values."
     (do 
         (apply force-need-update cells)
-        (await)
+        (apply await cells)
         (apply evaluate cells)))
 
 ; ============================
