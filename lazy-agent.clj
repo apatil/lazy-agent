@@ -6,7 +6,7 @@
 ; Good reference on scheduling: Scheduling and Automatic Parallelization.
 ; Chapter 1 covers scheduling in DAGs and is available free on Google Books.
 
-(set! *warn-on-reflection* true)
+;(set! *warn-on-reflection* true)
 
 ; ==================================================
 ; = Utility stuff not immediately related to cells =
@@ -66,8 +66,7 @@
     (loop [parents-sofar parents val-sofar (list)]
         (if (empty? parents-sofar) val-sofar
             (let [parent (last parents-sofar) 
-                rest-parents (butlast parents-sofar) 
-                ]
+                rest-parents (butlast parents-sofar)]
                 (if (id? parent)
                     ; If value has a key corresponding to this parent, cons the corresponding value
                     (recur rest-parents (cons (parent-val-map parent) val-sofar))
@@ -79,8 +78,7 @@
     (let [parents (cell-meta-parents cur-meta)
         update-fn (cell-meta-fn cur-meta)
         new-parents (complete-parents id-parent-vals parents)
-        new-val (apply update-fn new-parents)
-        ] 
+        new-val (apply update-fn new-parents)] 
         ; Create new value, preserving metadata, and put cell in either up-to-date or oblivious state.
         (with-meta (struct cell-val new-val new-status) cur-meta)))
         
@@ -164,18 +162,13 @@
 (defn updated? [c] (not (= (-> c deref :status) :needs-update)))
 (defn cell [name update-fn parents & [oblivious?]]
     "Creates a cell (lazy auto-agent) with given update-fn and parents."
-    (let [
-        id-parents (filter id? parents)
+    (let [id-parents (filter id? parents)
         n-id-parents (count id-parents)
         agent-parents (filter agent? id-parents)
         updated-parents (filter updated? id-parents)          
         id-parent-vals (zipmap updated-parents (map deref updated-parents))
-        cell (agent (with-meta
-                        needs-update-value
-                        (struct cell-meta agent-parents id-parent-vals n-id-parents parents update-fn oblivious? true)))        
-        add-parent-watcher (fn [p] (add-watch p cell (watcher-to-watch 
-                                (if (is-lazy-agent? p) (parent-watcher oblivious?) (report-to-child false oblivious?)))))
-        ]
+        cell (agent (with-meta needs-update-value (struct cell-meta agent-parents id-parent-vals n-id-parents parents update-fn oblivious? true)))        
+        add-parent-watcher (fn [p] (add-watch p cell (watcher-to-watch (if (is-lazy-agent? p) (parent-watcher oblivious?) (report-to-child false oblivious?)))))]
         (do
             ; Add a watcher to all the cell's parents
             (map-now add-parent-watcher id-parents)
@@ -214,11 +207,9 @@
     returns immediately. Returns a function that does the same thing,
     but waits for the result and returns it."
     (fn [& cells]
-        (let [        
-              latch (java.util.concurrent.CountDownLatch. (count (filter (comp not not-waiting? deref) cells)))
+        (let [latch (java.util.concurrent.CountDownLatch. (count (filter (comp not not-waiting? deref) cells)))
               watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
-              watcher-remover (fn [cell] (remove-watch cell latch))
-              ]
+              watcher-remover (fn [cell] (remove-watch cell latch))]
             (do
                 (map-now watcher-adder cells)            
                 (apply async-fn cells)             
