@@ -56,7 +56,7 @@
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 (defn force-need-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-need-update cells))
 
-; TODO: Make functions for altering parents.
+; TODO: Shorten code with macros.
 ; TODO: Propagate exceptions.
         
 (defn complete-parents [parent-val-map parents]
@@ -91,7 +91,7 @@
     ; needs update state, otherwise record its new value.
     (if (needs-update? parent-val) 
         (dissoc parent-val-map parent)
-        (assoc parent-val-map parent (:value parent-val))))
+        (assoc parent-val-map parent (cell-value parent-val))))
 
 (defn swap-id-parent-value [parent-val-map parent parent-val]
     ; Otherwise, just record its new value.
@@ -122,7 +122,7 @@
                     (with-meta cur-val new-meta))
                 ; React to the new value.
                 (react-fn cur-val new-meta))))))
-;        
+
 (defn watcher-to-watch [fun]
     "Converts an 'old-style' watcher function to a new synchronous watch.
     The watcher is used as the key of the new watch."
@@ -162,20 +162,21 @@
 ; =======================
 
 (defn updated? [c] (not (= (-> c deref :status) :needs-update)))
+(defn extract-value [x] (let [v (:value x)] (if v v x)))
+(def extract-cell-value (comp extract-value deref))
 (defn cell [name update-fn parents & [oblivious?]]
     "Creates a cell (lazy auto-agent) with given update-fn and parents."
-    (let [
-        id-parents (filter id? parents)
+    (let [parents (vec parents)
+        id-parents (set (filter id? parents))
         n-id-parents (count id-parents)
-        agent-parents (filter agent? id-parents)
+        agent-parents (set (filter agent? id-parents))
         updated-parents (filter updated? id-parents)          
-        id-parent-vals (zipmap updated-parents (map deref updated-parents))
+        id-parent-vals (zipmap updated-parents (map extract-cell-value updated-parents))
         cell (agent (with-meta
                         needs-update-value
                         (struct cell-meta agent-parents id-parent-vals n-id-parents parents update-fn oblivious? true)))        
         add-parent-watcher (fn [p] (add-watch p cell (watcher-to-watch 
-                                (if (is-lazy-agent? p) (parent-watcher oblivious?) (report-to-child false oblivious?)))))
-        ]
+                                (if (is-lazy-agent? p) (parent-watcher oblivious?) (report-to-child false oblivious?)))))]
         (do
             ; Add a watcher to all the cell's parents
             (map-now add-parent-watcher id-parents)
@@ -208,6 +209,7 @@
                 (.countDown latch)))
             latch))
 
+(def cell-waiting? (comp not not-waiting? deref))
 (defn synchronize [async-fn]
     "Takes any function that takes any number of cells as an argument,
     puts the cells through the :updating state at some point, and
@@ -215,7 +217,7 @@
     but waits for the result and returns it."
     (fn [& cells]
         (let [        
-              latch (java.util.concurrent.CountDownLatch. (count (filter (comp not not-waiting? deref) cells)))
+              latch (java.util.concurrent.CountDownLatch. (count (filter cell-waiting? cells)))
               watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
               watcher-remover (fn [cell] (remove-watch cell latch))
               ]
@@ -224,6 +226,58 @@
                 (apply async-fn cells)             
                 (.await latch)
                 (map-now watcher-remover cells)
-                (map deref cells)))))
+                (map deref-cell cells)))))
 
 (def evaluate (synchronize update))
+
+; ============================
+; = Change cell dependencies =
+; ============================
+
+(defn conditional-map-replace [old-map old-key new-key dissoc-cond assoc-cond]
+    "Utility function for switching parents."
+    (let [dissoc-map (if dissoc-cond (dissoc old-map old-key) old-map)
+            val (deref-or-val new-key)]
+        (if assoc-cond 
+            (if (up-to-date? val) (assoc dissoc-map new-key (extract-value val)) dissoc-map)
+            dissoc-map)))
+        
+(defn conditional-set-replace [old-set old-val new-val disj-cond conj-cond]
+    "Utility function for switching parents."
+    (let [disj-set (if disj-cond (disj old-set old-val) old-set)]
+        (if conj-cond (conj disj-set new-val) disj-set)))
+        
+(defn conditional-counter-change [old-ctr dec? inc?]
+    "Utility function for switching parents."    
+    (let [dec-ctr (if dec? (- old-ctr 1) old-ctr)]
+        (if inc? (+ dec-ctr 1) dec-ctr)))
+
+(defn replace-parent-msg [cell-val old-parent new-parent]
+    "This message is sent to cells by replace-parent."
+    (let [old-meta (meta cell-val)
+        parents (replace {old-parent new-parent} (cell-meta-parents old-meta))
+        new-id? (id? new-parent)
+        old-id? (id? old-parent)
+        new-agent? (agent? new-parent)
+        old-agent? (agent? old-parent)
+        agent-parents (conditional-set-replace (cell-meta-agent-parents old-meta) old-parent new-parent old-agent? new-agent?)
+        id-parent-vals (conditional-map-replace (cell-meta-id-parent-vals old-meta) old-parent new-parent old-id? new-id?)
+        n-id-parents (conditional-counter-change (cell-meta-n-id-parents old-meta) old-id? new-id?)]
+    (with-meta needs-update-value 
+        (assoc old-meta 
+            :parents parents
+            :agent-parents agent-parents 
+            :id-parent-vals id-parent-vals 
+            :n-id-parents n-id-parents))))
+            
+(defn replace-parent [cell old-parent new-parent]
+    "Replaces a cell's parent."
+    (do 
+        (remove-watch old-parent cell)                                                            
+        (send cell replace-parent-msg old-parent new-parent)                                      
+        (add-watch new-parent cell 
+            (watcher-to-watch 
+                (let [oblivious? (-> cell deref meta cell-meta-oblivious?)]
+                    (if (is-lazy-agent? new-parent) 
+                    (parent-watcher oblivious?) 
+                    (report-to-child false oblivious?)))))))

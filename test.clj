@@ -1,5 +1,5 @@
 (load-file "lazy-agent.clj")
-(refer 'lazy-agent :only ['def-cell 'update 'evaluate 'set-agent! 'force-need-update])
+(refer 'lazy-agent :only ['def-cell 'update 'evaluate 'set-agent! 'force-need-update 'replace-parent])
 
 (defn sleeping [fun]
     (fn [& x] (do (Thread/sleep 1000) (apply fun x))))
@@ -18,8 +18,10 @@
 (time (evaluate d e f))
 
 (set-agent! x 12)
+(replace-parent f c a)
 (time (update d e f))
 (set-agent! x 213)
+(replace-parent d c b)
 (time (evaluate a b c d e f))
 (force-need-update a b c d e f)
 (time (evaluate a b c d e f))
