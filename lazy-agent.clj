@@ -6,6 +6,17 @@
 ; Good reference on scheduling: Scheduling and Automatic Parallelization.
 ; Chapter 1 covers scheduling in DAGs and is available free on Google Books.
 
+; TODO: Make a fn analogous to synchronize that adds a watcher with a specified action to cells, which waits till they compute and then dispatches the action with the cells' values.
+; TODO: Abbreviations:
+;- la : lazy agent
+;- p : parent
+;- pv : parent value / parent val
+;- cv : cell value / cell val
+;- cm : cell meta
+;- obliv : oblivious
+; TODO: Shorten code with macros.
+; TODO: Propagate exceptions.
+
 (set! *warn-on-reflection* true)
 
 ; ==================================================
@@ -55,9 +66,6 @@
 
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 (defn force-need-update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-force-need-update cells))
-
-; TODO: Shorten code with macros.
-; TODO: Propagate exceptions.
         
 (defn complete-parents [parent-val-map parents]
     "Takes a map of the form {parent @parent}, and a list of mutable and
@@ -227,6 +235,8 @@
                 (.await latch)
                 (map-now watcher-remover cells)
                 (map deref-cell cells)))))
+
+
 
 (def evaluate (synchronize update))
 
