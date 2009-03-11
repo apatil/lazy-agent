@@ -58,7 +58,7 @@
     "Sets a cell's val to v, and sets its status to either :updated or :oblivious as appropriate."
     (send c 
         (fn [old-v] (let [updated-status (if (inherently-oblivious? old-v) :oblivious :up-to-date)]
-                (with-meta (struct cell-val v updated-status) (meta v))))))
+            (with-meta (struct cell-val v updated-status) (meta v))))))
 
 ; ==================
 ; = Updating stuff =
@@ -199,7 +199,7 @@
     "Creates and inters a cell in the current namespace, bound to sym,
     with given parents and update function."
     [sym update-fn parents & [oblivious?]] 
-    `(def ~sym (cell ~@(name sym) ~update-fn ~parents ~oblivious?)))
+    `(def ~sym (cell ~(name sym) ~update-fn ~parents ~oblivious?)))
 
 ; =======================================
 ; = Synchronized multi-cell evaluations =
