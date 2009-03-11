@@ -49,11 +49,15 @@
 
 (defn up-to-date? [cell] (= :up-to-date (cell-val-status cell)))
 (defn oblivious? [cell] (= :oblivious (cell-val-status cell)))
+(defn inherently-oblivious? [cell-val] (-> cell-val meta cell-meta-oblivious?))
 (defn updating? [cell] (= :updating (cell-val-status cell)))
 (defn needs-update? [cell] (= :needs-update (cell-val-status cell)))
 (defn second-arg [x y] y)
-(defn set-agent! [a v] (send a second-arg v))
-(defn set-cell! [c v] (send c (fn [x] (struct cell-val :value v :status :up-to-date))))
+
+(defn set-cell! [c v] 
+    (send c 
+        (fn [old-v] (let [updated-status (if (inherently-oblivious? old-v) :oblivious :up-to-date)]
+                (with-meta (struct cell-val v updated-status) (meta v))))))
 
 ; ==================
 ; = Updating stuff =
