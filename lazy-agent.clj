@@ -14,16 +14,24 @@
 ;- cv : cell value / cell val
 ;- cm : cell meta
 ;- obliv : oblivious
-; TODO: Shorten code with macros.
 ; TODO: Propagate exceptions.
 
 ;(set! *warn-on-reflection* true)
-
 
 ; ==================================================
 ; = Utility stuff not immediately related to cells =
 ; ==================================================
 (ns lazy-agent)
+
+(defmacro structmap-and-accessors [sym & fields]
+    "Defunes a structmap with given symbol, and automatically creates accessors for all its fields."
+    (let [code-lst `(defstruct ~sym ~@fields)
+            sym-dash (.concat (name sym) "-")
+            accessor-names (zipmap fields (map (comp #(.concat sym-dash %1) name) fields))]
+        (cons 'do (cons code-lst
+            (for [field fields] (let [n (accessor-names field) s (symbol n)]
+                `(def ~s (accessor ~sym ~field))))))))
+                
 (defn agent? [x] (instance? clojure.lang.Agent x))
 (defn id? [x] (instance? clojure.lang.IDeref x))
 (defn deref-or-val [x] (if (id? x) @x x))
@@ -32,26 +40,17 @@
 ; ============================================
 ; = Structmaps and accessors for cell values =
 ; ============================================
-(defstruct cell-val :value :status)
-(def cell-value (accessor cell-val :value))
-(def cell-status (accessor cell-val :status))
+(structmap-and-accessors cell-val :value :status)
 (def needs-update-value (struct cell-val nil :needs-update))
-(def deref-cell (comp cell-value deref))
+(def deref-cell (comp cell-val-value deref))
 
-(defstruct cell-meta :agent-parents :id-parent-vals :n-id-parents :parents :fn :oblivious? :lazy-agent)
-(def cell-meta-agent-parents (accessor cell-meta :agent-parents))
-(def cell-meta-id-parent-vals (accessor cell-meta :id-parent-vals))
-(def cell-meta-n-id-parents (accessor cell-meta :n-id-parents))
-(def cell-meta-parents (accessor cell-meta :parents))
-(def cell-meta-fn (accessor cell-meta :fn))
-(def cell-meta-oblivious? (accessor cell-meta :oblivious?))
-(def cell-meta-lazy-agent (accessor cell-meta :lazy-agent))
+(structmap-and-accessors cell-meta :agent-parents :id-parent-vals :n-id-parents :parents :fn :oblivious? :lazy-agent)
 (defn is-lazy-agent? [x] (-> x deref meta :lazy-agent))
 
-(defn up-to-date? [cell] (= :up-to-date (cell-status cell)))
-(defn oblivious? [cell] (= :oblivious (cell-status cell)))
-(defn updating? [cell] (= :updating (cell-status cell)))
-(defn needs-update? [cell] (= :needs-update (cell-status cell)))
+(defn up-to-date? [cell] (= :up-to-date (cell-val-status cell)))
+(defn oblivious? [cell] (= :oblivious (cell-val-status cell)))
+(defn updating? [cell] (= :updating (cell-val-status cell)))
+(defn needs-update? [cell] (= :needs-update (cell-val-status cell)))
 (defn second-arg [x y] y)
 (defn set-agent! [a v] (send a second-arg v))
 (defn set-cell! [c v] (send c (fn [x] (struct cell-val :value v :status :up-to-date))))
@@ -98,7 +97,7 @@
     ; needs update state, otherwise record its new value.
     (if (needs-update? parent-val) 
         (dissoc parent-val-map parent)
-        (assoc parent-val-map parent (cell-value parent-val))))
+        (assoc parent-val-map parent (cell-val-value parent-val))))
 
 (defn swap-id-parent-value [parent-val-map parent parent-val]
     ; Otherwise, just record its new value.
@@ -202,7 +201,7 @@
 ; =======================================
 (defn not-waiting? [cell-val] 
     "Determines whether a cell is either up-to-date or oblivious."
-    (let [status (cell-status cell-val)]
+    (let [status (cell-val-status cell-val)]
         (or 
             (= :up-to-date status) 
             (= :oblivious status))))
@@ -276,7 +275,7 @@
         agent-parents (conditional-set-replace (cell-meta-agent-parents old-meta) old-parent new-parent old-agent? new-agent?)
         id-parent-vals (conditional-map-replace (cell-meta-id-parent-vals old-meta) old-parent new-parent old-id? new-id?)
         n-id-parents (conditional-counter-change (cell-meta-n-id-parents old-meta) old-id? new-id?)]
-    (with-meta (if (= (cell-status cell-val) :oblivious) cell-val needs-update-value)
+    (with-meta (if (= (cell-val-status cell-val) :oblivious) cell-val needs-update-value)
         (assoc old-meta 
             :parents parents
             :agent-parents agent-parents 
