@@ -7,13 +7,6 @@
 ; Chapter 1 covers scheduling in DAGs and is available free on Google Books.
 
 ; TODO: Make a fn analogous to synchronize that adds a watcher with a specified action to cells, which waits till they compute and then dispatches the action with the cells' vals.
-; TODO: Abbreviations:
-;- la : lazy agent
-;- p : parent
-;- pv : parent val / parent val
-;- cv : cell val / cell val
-;- cm : cell meta
-;- obliv : oblivious
 ; TODO: Propagate exceptions.
 
 ;(set! *warn-on-reflection* true)
