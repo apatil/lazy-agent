@@ -7,7 +7,13 @@
 ; Chapter 1 covers scheduling in DAGs and is available free on Google Books.
 
 ; TODO: Make a fn analogous to synchronize that adds a watcher with a specified action to cells, which waits till they compute and then dispatches the action with the cells' vals.
-; TODO: Propagate exceptions.
+; TODO: Propagate exceptions. Exception scheme:
+; - Make compute-cv catch errors and return {:val {:self <the error>} :status :error}
+; - Parent watchers should respond to errors by setting the child cell's value to {:val {parent <the error>}} regardless of
+;   the child's current status.
+;   - If the child's status is already :error, add the new parent and its corresponding error to the val map.
+;   - If the parent's val map contains keys other than self, these key / error pairs should also be added to the child's val map.
+; - If a child's status is error, it should accept reports from its parents as normal. 
 
 ;(set! *warn-on-reflection* true)
 
@@ -20,7 +26,7 @@
     "Defunes a structmap with given symbol, and automatically creates accessors for all its fields."
     (let [code-lst `(defstruct ~sym ~@fields)
             sym-dash (.concat (name sym) "-")
-            accessor-names (zipmap fields (map (comp #(.concat sym-dash %1) name) fields))]
+            accessor-names (zipmap fields (map (comp #(.concat sym-dash %) name) fields))]
         (cons 'do (cons code-lst
             (for [field fields] (let [n (accessor-names field) s (symbol n)]
                 `(def ~s (accessor ~sym ~field))))))))
@@ -29,39 +35,49 @@
 (defn id? [x] (instance? clojure.lang.IDeref x))
 (defn deref-or-val [x] (if (id? x) @x x))
 (defn map-now [fn coll] (dorun (map fn coll)))
-
-; ============================================
-; = Structmaps and accessors for cell vals =
-; ============================================
-(structmap-and-accessors cell-val :val :status)
-(def needs-update-val (struct cell-val nil :needs-update))
-(def deref-cell (comp cell-val-val deref))
-
-(structmap-and-accessors cell-meta :agent-parents :id-parent-vals :n-id-parents :parents :fn :oblivious? :lazy-agent)
-(defn is-lazy-agent? [x] (-> x deref meta :lazy-agent))
-
-(defn up-to-date? [cell] (= :up-to-date (cell-val-status cell)))
-(defn oblivious? [cell] (= :oblivious (cell-val-status cell)))
-(defn inherently-oblivious? [cell-val] (-> cell-val meta cell-meta-oblivious?))
-(defn updating? [cell] (= :updating (cell-val-status cell)))
-(defn needs-update? [cell] (= :needs-update (cell-val-status cell)))
 (defn second-arg [x y] y)
 
-(defn set-cell! [c v] 
-    "Sets a cell's val to v, and sets its status to either :updated or :oblivious as appropriate."
-    (send c 
-        (fn [old-v] (let [updated-status (if (inherently-oblivious? old-v) :oblivious :up-to-date)]
-            (with-meta (struct cell-val v updated-status) (meta v))))))
+; ===============================================================
+; = Structmaps and accessors for cell values and cell metadata. =
+; ===============================================================
+(structmap-and-accessors cv 
+    :val            ; Actual value of cell.
+    :status)        ; Status of cell.    
+(def needs-update-val (struct cv nil :needs-update))
+
+(structmap-and-accessors cm 
+    :agent-parents  ; Set of parents that are agents.
+    :id-parent-vals ; Map from id parents to their values.
+    :n-id-parents   ; Size of id parents set.
+    :parents        ; Vector of parents.
+    :fn             ; Function the cell uses to update its value.
+    :oblivious?     ; Whether the function should update to :oblivious or :up-to-date
+    :lazy-agent)    ; Tags the cell as a lazy agent.
+
+; =========================================
+; = Utility functions for examining cells =
+; =========================================
+(def deref-cell (comp cv-val deref))
+(defn is-lazy-agent? [x] (-> x deref meta :lazy-agent))
+(defn up-to-date? [cell] (= :up-to-date (cv-status cell)))
+(defn oblivious? [cell] (= :oblivious (cv-status cell)))
+(defn inherently-oblivious? [cv] (-> cv meta cm-oblivious?))
+(defn updating? [cell] (= :updating (cv-status cell)))
+(defn needs-update? [cell] (= :needs-update (cv-status cell)))
 
 ; ==================
 ; = Updating stuff =
 ; ==================
 
+(defn set-cell! [c v] 
+    "Sets a cell's val to v, and sets its status to either :updated or :oblivious as appropriate."
+    (send c 
+        (fn [old-v] (let [updated-status (if (inherently-oblivious? old-v) :oblivious :up-to-date)]
+            (with-meta (struct cv v updated-status) (meta v))))))
 (defn updating-fn [x] (if (needs-update? x) (assoc x :status :updating) x))
 (defn force-need-update-fn [x] (with-meta needs-update-val (meta x)))
 (defn send-force-need-update [p] "Utility function that puts p into the needs-update state, even if p is oblivious." (send p force-need-update-fn))
 (defn send-update [p] "Utility function that puts p into the updating state if it needs an update." (send p updating-fn))
-
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 (defn force-need-update [& cells] "Asynchronously puts the cells in :needs-update and returns immediately."(map-now send-force-need-update cells))
         
@@ -79,14 +95,14 @@
                     ; Otherwise, cons the parent.
                     (recur rest-parents (cons parent val-sofar)))))))
 
-(defn compute-cell-val [cur-val cur-meta id-parent-vals new-status]
+(defn compute-cv [cur-val cur-meta id-parent-vals new-status]
     "Can be sent to a cell when its id-parent-vals are complete to compute its val."
-    (let [parents (cell-meta-parents cur-meta)
-        update-fn (cell-meta-fn cur-meta)
+    (let [parents (cm-parents cur-meta)
+        update-fn (cm-fn cur-meta)
         new-parents (complete-parents id-parent-vals parents)
         new-val (apply update-fn new-parents)] 
         ; Create new val, preserving metadata, and put cell in either up-to-date or oblivious state.
-        (with-meta (struct cell-val new-val new-status) cur-meta)))
+        (with-meta (struct cv new-val new-status) cur-meta)))
         
 (defn swap-la-parent-val [parent-val-map parent parent-val]
     "Utility function that incorporates updated parents into a cell's
@@ -95,7 +111,7 @@
     ; needs update state, otherwise record its new val.
     (if (needs-update? parent-val) 
         (dissoc parent-val-map parent)
-        (assoc parent-val-map parent (cell-val-val parent-val))))
+        (assoc parent-val-map parent (cv-val parent-val))))
 
 (defn swap-id-parent-val [parent-val-map parent parent-val]
     ; Otherwise, just record its new val.
@@ -116,13 +132,13 @@
             updated-status (if oblivious? :oblivious :up-to-date)]
         (fn [cur-val parent parent-val]
             (let [cur-meta (meta cur-val)
-                new-id-parent-vals (swap-fn (cell-meta-id-parent-vals cur-meta) parent parent-val)
+                new-id-parent-vals (swap-fn (cm-id-parent-vals cur-meta) parent parent-val)
                 new-meta (assoc cur-meta :id-parent-vals new-id-parent-vals)] 
             ; If the child is updating, check whether it's ready to compute.
             (if (updating? cur-val) 
-                (if (= (count new-id-parent-vals) (cell-meta-n-id-parents new-meta))
+                (if (= (count new-id-parent-vals) (cm-n-id-parents new-meta))
                     ; Compute if possible, otherwise do nothing.
-                    (compute-cell-val cur-val new-meta new-id-parent-vals updated-status)
+                    (compute-cv cur-val new-meta new-id-parent-vals updated-status)
                     (with-meta cur-val new-meta))
                 ; React to the new val.
                 (react-fn cur-val new-meta))))))
@@ -144,22 +160,22 @@
                 (report cur-val p p-val)
                 cur-val))))
 
-(defn cell-watch [updated-status cell old-val cell-val]
+(defn cell-watch [updated-status cell old-val cv]
     "Watches a non-root cell. If it changes and requests an update,
     it computes if possible. Otherwise it sends an update request to all its
     parents."
-    (if (not= old-val cell-val)
-        (if (updating? cell-val)
-            (let [cell-meta (meta cell-val)
-                    id-parent-vals (cell-meta-id-parent-vals cell-meta)
+    (if (not= old-val cv)
+        (if (updating? cv)
+            (let [cm (meta cv)
+                    id-parent-vals (cm-id-parent-vals cm)
                     num-id-parent-vals (count id-parent-vals)
-                    num-id-parents (cell-meta-n-id-parents cell-meta)]
+                    num-id-parents (cm-n-id-parents cm)]
                 ; If the cell has changed into the updating state, check whether an immediate computation is possible.
                 (if (=  num-id-parent-vals num-id-parents)
                     ; Compute if possible
-                    (send cell compute-cell-val cell-meta id-parent-vals updated-status)
+                    (send cell compute-cv cm id-parent-vals updated-status)
                     ; Otherwise put all parents that need updates into the updating state.
-                    (map-now send-update (cell-meta-agent-parents cell-meta)))))))
+                    (map-now send-update (cm-agent-parents cm)))))))
 
 ; =======================
 ; = Cell creation stuff =
@@ -167,7 +183,7 @@
 
 (defn updated? [c] (not (= (-> c deref :status) :needs-update)))
 (defn extract-val [x] (let [v (:val x)] (if v v x)))
-(def extract-cell-val (comp extract-val deref))
+(def extract-cv (comp extract-val deref))
 (defn cell [name update-fn parents & [oblivious?]]
     "Creates a cell (lazy auto-agent) with given update-fn and parents."
     (let [parents (vec parents)
@@ -175,10 +191,10 @@
         n-id-parents (count id-parents)
         agent-parents (set (filter agent? id-parents))
         updated-parents (filter updated? id-parents)          
-        id-parent-vals (zipmap updated-parents (map extract-cell-val updated-parents))
+        id-parent-vals (zipmap updated-parents (map extract-cv updated-parents))
         cell (agent (with-meta
                         needs-update-val
-                        (struct cell-meta agent-parents id-parent-vals n-id-parents parents update-fn oblivious? true)))        
+                        (struct cm agent-parents id-parent-vals n-id-parents parents update-fn oblivious? true)))        
         add-parent-watcher (fn [p] (add-watch p cell (watcher-to-watch 
                                 (if (is-lazy-agent? p) (parent-watcher oblivious?) (report-to-child false oblivious?)))))]
         (do
@@ -197,9 +213,9 @@
 ; =======================================
 ; = Synchronized multi-cell evaluations =
 ; =======================================
-(defn not-waiting? [cell-val] 
+(defn not-waiting? [cv] 
     "Determines whether a cell is either up-to-date or oblivious."
-    (let [status (cell-val-status cell-val)]
+    (let [status (cv-status cv)]
         (or 
             (= :up-to-date status) 
             (= :oblivious status))))
@@ -262,18 +278,18 @@
     (let [dec-ctr (if dec? (- old-ctr 1) old-ctr)]
         (if inc? (+ dec-ctr 1) dec-ctr)))
 
-(defn replace-parent-msg [cell-val old-parent new-parent]
+(defn replace-parent-msg [cv old-parent new-parent]
     "This message is sent to cells by replace-parent."
-    (let [old-meta (meta cell-val)
-        parents (replace {old-parent new-parent} (cell-meta-parents old-meta))
+    (let [old-meta (meta cv)
+        parents (replace {old-parent new-parent} (cm-parents old-meta))
         new-id? (id? new-parent)
         old-id? (id? old-parent)
         new-agent? (agent? new-parent)
         old-agent? (agent? old-parent)
-        agent-parents (conditional-set-replace (cell-meta-agent-parents old-meta) old-parent new-parent old-agent? new-agent?)
-        id-parent-vals (conditional-map-replace (cell-meta-id-parent-vals old-meta) old-parent new-parent old-id? new-id?)
-        n-id-parents (conditional-counter-change (cell-meta-n-id-parents old-meta) old-id? new-id?)]
-    (with-meta (if (= (cell-val-status cell-val) :oblivious) cell-val needs-update-val)
+        agent-parents (conditional-set-replace (cm-agent-parents old-meta) old-parent new-parent old-agent? new-agent?)
+        id-parent-vals (conditional-map-replace (cm-id-parent-vals old-meta) old-parent new-parent old-id? new-id?)
+        n-id-parents (conditional-counter-change (cm-n-id-parents old-meta) old-id? new-id?)]
+    (with-meta (if (= (cv-status cv) :oblivious) cv needs-update-val)
         (assoc old-meta 
             :parents parents
             :agent-parents agent-parents 
@@ -291,7 +307,7 @@
         ; Add new watcher.                
         (add-watch new-parent cell 
             (watcher-to-watch 
-                (let [oblivious? (-> cell deref meta cell-meta-oblivious?)]
+                (let [oblivious? (-> cell deref meta cm-oblivious?)]
                     (if (is-lazy-agent? new-parent) 
                     (parent-watcher oblivious?) 
                     (report-to-child false oblivious?)))))))
