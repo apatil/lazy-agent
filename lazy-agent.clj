@@ -98,19 +98,15 @@
                     ; Otherwise, cons the parent.
                     (recur rest-parents (cons parent v-sofar)))))))
         
-(defn record-la-parent-v [child-v pv-map p p-v]
+(defn record-la-parent-v [m pv-map p pv]
     "Utility function that incorporates updated ps into a cell's
     p v ref." 
-    (with-meta
-        child-v
-        (assoc (meta child-v) :id-p-vs (assoc pv-map p (cv-v p-v)))))
+    (assoc m :id-parent-vals (assoc pv-map p (cv-val pv))))
 
-(defn forget-la-parent-v [child-v pv-map p]
+(defn forget-la-parent-v [m pv-map p]
     "Utility function that incorporates updated ps into a cell's
     p v ref." 
-    (with-meta
-        child-v
-        (assoc (meta child-v) :id-p-vs (dissoc pv-map p))))
+    (assoc m :id-parent-vals (dissoc pv-map p)))
 
 ; ==================
 ; = Updating stuff =
@@ -120,8 +116,8 @@
     "Message sent when a parent computes."
     (let [old-m (meta v)
         old-pv-map (cm-id-parent-vals old-m)
-        new-v (record-la-parent-v v old-pv-map p new-pv)
-        m (meta new-v)
+        m (record-la-parent-v v old-m old-pv-map p new-pv)
+        new-v (with-meta v m)
         pv-map (cm-id-parent-vals m)]
         ; If oblivious, do nothing
         (if (oblvious? new-v) 
@@ -168,9 +164,10 @@
 (defn error-m [v p err]
     "Message sent when a parent enters the error state."
     ; Drop the parent from the parent value map if necessary.
-    (let [m (meta v)
-        old-pv-map (cm-id-parent-vals m)
-        new-v (forget-la-parent-v v old-pv-map p)]
+    (let [old-m (meta v)
+        old-pv-map (cm-id-parent-vals old-m)
+        m (forget-la-parent-v v old-m old-pv-map p)
+        new-v (with-meta v m)]
         ; If the cell is oblivious, do nothing.
         (if (oblvious? new-v) 
             new-v
@@ -207,9 +204,10 @@
 (defn needs-update-m [v c p]
     "Message sent when a parent goes into the needs-update state."
     ; Drop the parent from the parent value map if necessary.
-    (let [m (meta v)
-        old-pv-map (cm-id-parent-vals m)
-        new-v (forget-la-parent-v v old-pv-map p)]
+    (let [old-m (meta v)
+        old-pv-map (cm-id-parent-vals old-m)
+        m (forget-la-parent-v v old-m old-pv-map p)
+        new-v (with-meta v m)]
         ; If the cell is not up-to-date (oblivious, updating, needing an update, or in error)
         ; do nothing.
         (if (not (up-to-date? new-v)) 
