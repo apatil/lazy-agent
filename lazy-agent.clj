@@ -6,24 +6,33 @@
 ; Good reference on scheduling: Scheduling and Automatic Parallelization.
 ; Chapter 1 covers scheduling in DAGs and is available free on Google Books.
 
+; TODO: You can't implement the exception scheme well without letting cells know who their children are (put it in the metadata). Then you may as well do away with the parent watchers; just let the messages propagate the sends. You can probably do away with cell-watcher by wrapping the update message, too, and it'll probably perform better.
+;  - You can't broadcast the error to all descendants because then you'll clobber the descendants of oblivious descendants, which shouldn't happen.
+;  - You can't propagate exceptions with watchers because, if an ancestor of a cell recovers, the cell's child will have to do some hard thinking to figure out whether to drop the ancestors from its value map.
+
 ; TODO: Make a fn analogous to synchronize that adds a watcher with a specified action to cells, which waits till they compute and then dispatches the action with the cells' vals.
+
 ; TODO: Propagate exceptions. Exception scheme:
-; - Make compute-cv catch errors and return {:val {:self <the error>} :status :error}
-; - Parent watchers should respond to errors by setting the child cell's value to {:val {parent <the error>}} regardless of
+; - Make compute-cv catch errors and return {:val {<self> <the error>} :status :error}
+; - Parent watchers should respond to errors by setting the child cell's value to {:val {<parent> <the error>}} regardless of
 ;   the child's current status.
 ;   - If the child's status is already :error, add the new parent and its corresponding error to the val map.
 ;   - If the parent's val map contains keys other than self, these key / error pairs should also be added to the child's val map.
-; - If a child's status is error, it should accept reports from its parents as normal. 
+; - If a child's status is error, it should accept reports from its parents as normal.
+;   - If the parent's status moves away from error, it should dissoc the parent from its val map.
+;   - That dissoc should be propagated.
+;   - If its val map is of length zero, it should switch status to needs-update.
+; - If a child's status is error and it receives the update message, it should do nothing.
 
 ;(set! *warn-on-reflection* true)
 
 ; ==================================================
 ; = Utility stuff not immediately related to cells =
 ; ==================================================
-(ns lazy-agent)
+;(ns lazy-agent)
 
 (defmacro structmap-and-accessors [sym & fields]
-    "Defunes a structmap with given symbol, and automatically creates accessors for all its fields."
+    "Defunes a structmap with given symbol, and defines accessors for all its fields."
     (let [code-lst `(defstruct ~sym ~@fields)
             sym-dash (.concat (name sym) "-")
             accessor-names (zipmap fields (map (comp #(.concat sym-dash %) name) fields))]
@@ -60,9 +69,10 @@
 (def deref-cell (comp cv-val deref))
 (defn is-lazy-agent? [x] (-> x deref meta :lazy-agent))
 (defn up-to-date? [cell] (= :up-to-date (cv-status cell)))
-(defn oblivious? [cell] (= :oblivious (cv-status cell)))
 (defn inherently-oblivious? [cv] (-> cv meta cm-oblivious?))
+(defn oblivious? [cell] (= :oblivious (cv-status cell)))
 (defn updating? [cell] (= :updating (cv-status cell)))
+(defn error? [cell] (= :error (cv-status cell)))
 (defn needs-update? [cell] (= :needs-update (cv-status cell)))
 
 ; ==================
@@ -80,6 +90,10 @@
 (defn send-update [p] "Utility function that puts p into the updating state if it needs an update." (send p updating-fn))
 (defn update [& cells] "Asynchronously updates the cells and returns immediately."(map-now send-update cells))
 (defn force-need-update [& cells] "Asynchronously puts the cells in :needs-update and returns immediately."(map-now send-force-need-update cells))
+
+(defn force-error [x] (with-meta (struct cv (Error.) :error) (meta x)))
+(defn send-force-error [p] "Puts the cell into the error state." (send p force-error))
+
         
 (defn complete-parents [parent-val-map parents]
     "Takes a map of the form {parent @parent}, and a list of mutable and
@@ -130,35 +144,56 @@
     (let [swap-fn (if parent-lazy-agent? swap-la-parent-val swap-id-parent-val)
             react-fn (if oblivious? with-meta reaction)
             updated-status (if oblivious? :oblivious :up-to-date)]
-        (fn [cur-val parent parent-val]
+        (fn [cur-val parent old-val parent-val]
             (let [cur-meta (meta cur-val)
                 new-id-parent-vals (swap-fn (cm-id-parent-vals cur-meta) parent parent-val)
                 new-meta (assoc cur-meta :id-parent-vals new-id-parent-vals)] 
-            ; If the child is updating, check whether it's ready to compute.
-            (if (updating? cur-val) 
-                (if (= (count new-id-parent-vals) (cm-n-id-parents new-meta))
-                    ; Compute if possible, otherwise do nothing.
+
+            
+            (if
+                ; If the child is updating, check whether it's ready to compute.
+                (updating? cur-val) (if (= (count new-id-parent-vals) (cm-n-id-parents new-meta))
                     (compute-cv cur-val new-meta new-id-parent-vals updated-status)
                     (with-meta cur-val new-meta))
+                
                 ; React to the new val.
                 (react-fn cur-val new-meta))))))
+
+(defn report-recovery [cur-val key]
+    "Acknowledges a recovery in an ancestor."
+    (let [new-val (dissoc cur-val key)]
+        (if (empty? new-val) 
+            (with-meta needs-update-val (meta cur-val)) 
+            new-val)))
+
+(defn report-error [cur-val key err]
+    "Acknowledges an error in an ancestor."
+    (if (error? cur-val)
+        (assoc cur-val :val (assoc (cv-val cur-val) key err))
+        (with-meta (struct cv {key err} :error) (meta cur-val))))
 
 (defn watcher-to-watch [fun]
     "Converts an 'old-style' watcher function to a new synchronous watch.
     The watcher is used as the key of the new watch."
     (fn [watcher reference old-val new-val]
         (if (not= old-val new-val)
-            (send watcher fun reference new-val))))        
+            (send watcher fun reference old-val new-val))))        
 
 (defn parent-watcher [oblivious?]
     "Watches a parent cell on behalf of one of its children. This watcher 
     has access to a ref which holds the vals of all the target child's 
     updated parents. It also reports parent chages to the child."
     (let [report (report-to-child true oblivious?)]
-        (fn [cur-val p p-val]
-            (if (not (updating? p-val))
-                (report cur-val p p-val)
-                cur-val))))
+        (fn [cur-val p old-val p-val]
+            (cond 
+                (error? old-val)
+                    (not (error? p-val)
+                        (report-recovery cur-val p))
+                (error? p-val) 
+                    (report-error cur-val p p-val)                    
+                (not (updating? p-val)) 
+                    (report cur-val p p-val)
+                true cur-val))))
 
 (defn cell-watch [updated-status cell old-val cv]
     "Watches a non-root cell. If it changes and requests an update,
