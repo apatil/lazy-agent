@@ -6,25 +6,14 @@
 ; Good reference on scheduling: Scheduling and Automatic Parallelization.
 ; Chapter 1 covers scheduling in DAGs and is available free on Google Books.
 
-; TODO: You can't implement the exception scheme well without letting cells know who their children are (put it in the metadata). Then you may as well do away with the parent watchers; just let the messages propagate the sends. You can probably do away with cell-watcher by wrapping the update message, too, and it'll probably perform better.
-;  - You can't broadcast the error to all descendants because then you'll clobber the descendants of oblivious descendants, which shouldn't happen.
-;  - You can't propagate exceptions with watchers because, if an ancestor of a cell recovers, the cell's child will have to do some hard thinking to figure out whether to drop the ancestors from its value map.
+; TODO: Eliminate parent-recording repetition with macros.
+; TODO: Search for idiomatic equivalent to map-now-over-first etc.
+; TODO: Need to handle non-lazy-agent parents with watchers that dispatch messages as needed. Again.
 
 ; TODO: Make a fn analogous to synchronize that adds a watcher with a specified action to cells, which waits till they compute and then dispatches the action with the cells' vals.
 
-; TODO: Propagate exceptions. Exception scheme:
-; - Make compute-cv catch errors and return {:val {<self> <the error>} :status :error}
-; - Parent watchers should respond to errors by setting the child cell's value to {:val {<parent> <the error>}} regardless of
-;   the child's current status.
-;   - If the child's status is already :error, add the new parent and its corresponding error to the val map.
-;   - If the parent's val map contains keys other than self, these key / error pairs should also be added to the child's val map.
-; - If a child's status is error, it should accept reports from its parents as normal.
-;   - If the parent's status moves away from error, it should dissoc the parent from its val map.
-;   - That dissoc should be propagated.
-;   - If its val map is of length zero, it should switch status to needs-update.
-; - If a child's status is error and it receives the update message, it should do nothing.
 
-;(set! *warn-on-reflection* true)
+(set! *warn-on-reflection* true)
 
 ; ==================================================
 ; = Utility stuff not immediately related to cells =
@@ -108,11 +97,8 @@
     p v ref." 
     (assoc m :id-parent-vals (dissoc pv-map p)))
 
-; ==================
-; = Updating stuff =
-; ==================
-
-(defn compute-m [v p old-pv new-pv] 
+; TODO: These next two need to be mutually referential.
+(defn compute-m [v p new-pv] 
     "Message sent when a parent computes."
     (let [old-m (meta v)
         old-pv-map (cm-id-parent-vals old-m)
@@ -140,7 +126,7 @@
         children (cm-children m)] 
         (do
             ; Send compute message to children.
-            (map-now-over-first compute-m children c (cv-val v) new-v)
+            (map-now-over-first compute-m children c new-v)
             ; Create new v, preserving metadata, and put cell in either up-to-date or oblivious state.
             (with-meta (struct cv new-v new-status) m))))
 
@@ -219,6 +205,10 @@
                 (with-meta needs-update-val m)))))
                 
 
+; ================================================
+; = Updating functions to be called by the user. =
+; ================================================
+
 (defn set-cell! [c v] 
     "Sets a cell's val to v, and sets its status to either :updated or :oblivious as appropriate."
     (send c 
@@ -227,7 +217,10 @@
                             children (cm-children old-meta)
                             new-v (with-meta (struct cv v updated-status) old-meta)]
             (do 
-                (map-now-with compute-m children c old-v v)
+                ; If switching from error state, send recovery message
+                (if (error? old-v) (map-now-over-first recovery-m children c))
+                ; Send compute message
+                (map-now-with-first compute-m children c v)
                 new-val)))))
 
 (defn force-needs-update [c] "Utility function that puts p into the needs-update state, even if p is oblivious." 
@@ -251,7 +244,11 @@
 ; = Cell creation stuff =
 ; =======================
 
-(defn updated? [c] (not (= (-> c deref :status) :needs-update)))
+(defn updated? [c] 
+    (let [status (-> c deref :status)]
+        (if (not status) 
+            true 
+            (= status :up-to-date))))
 (defn extract-val [x] (let [v (:val x)] (if v v x)))
 (def extract-cv (comp extract-val deref))
 (defn cell [name update-fn parents & [oblivious?]]
