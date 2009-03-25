@@ -4,7 +4,7 @@
 (defn set-agent! [a v] (send a (fn [x] v)))
 
 (defn sleeping [fun]
-    (fn [& x] (do (Thread/sleep 100) (apply fun x))))
+    (fn [& x] (do (Thread/sleep 1000) (apply fun x))))
 ;(defn sleeping [fun] fun)
 
 (def x (agent 10))
