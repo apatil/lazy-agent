@@ -16,6 +16,10 @@
 ;- obliv : oblivious
 ; TODO: Shorten code with macros.
 ; TODO: Propagate exceptions.
+; TODO: Transactions won't actually work for rejecting jumps. When a cell computes, have its update-fn memoize its last arguments.
+; TODO: Transactions won't actually work for pipelining either. Just make this one actor-based, then make an implementation later that's truly stateless.
+; Then you can pipeline all you want.
+
 
 ;(set! *warn-on-reflection* true)
 
