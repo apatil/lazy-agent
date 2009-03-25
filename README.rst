@@ -84,6 +84,8 @@ It needs to receive a ``force-need-update`` message to change state to ``{:value
     {:val nil, :status :needs-update}
     user=> (evaluate c)
     (56/11)
+    user=> @c
+    {:val 56/11, :status :oblivious}
 
 Exceptions
 ----------
@@ -103,6 +105,13 @@ If a cell encounters an exception when computing, that exception is recorded in 
     0
     user=> (evaluate a d)  
     ({:self #<ArithmeticException java.lang.ArithmeticException: Divide by zero>} {#<Agent@85e41d: {:val {:self #<ArithmeticException java.lang.ArithmeticException: Divide by zero>}, :status :error}> #<ArithmeticException java.lang.ArithmeticException: Divide by zero>})
+    
+Exceptions are stored in maps to make it easy to figure out the cell in which they originated::
+
+    user=> ((@a :val) :self)
+    #<ArithmeticException java.lang.ArithmeticException: Divide by zero>
+    user=> ((@d :val) a)
+    #<ArithmeticException java.lang.ArithmeticException: Divide by zero>
 
 Oblivious descendants ignore the exception::
 
