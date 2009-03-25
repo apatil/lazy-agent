@@ -9,9 +9,17 @@ If you deref a lazy cell, you'll see a map: ``{:value xxx :status yyy}``. ``:sta
 * ``:updating``
 * ``:up-to-date``
 * ``:error`` or
-* ``:oblivious``. If a cell is up-to-date or oblivious, ``:value`` gives the value of the cell.
+* ``:oblivious``
 
-When a lazy agent's ancestor changes, its value changes to {:value nil :status :needs-update} but it does not compute its new value until it receives a message instructing it to do so. To send the update message to a group of agents, do (update a b c d e). To send the update message and wait for the values, do (evaluate a b c d e).
+If a cell is up-to-date or oblivious, ``:value`` gives the value of the cell.
+
+When a lazy agent's ancestor changes, its value changes to ``{:value nil :status :needs-update}`` but it does not compute its new value until it receives a message instructing it to do so. To send the update message to a group of agents, do:: 
+
+(update a b c d e) 
+
+To send the update message and wait for the values, do:: 
+
+(evaluate a b c d e)
 
 Oblivious agents are even lazier than lazy agents. When an oblivious agent is up-to-date, its status is :oblivious. If an ancestor subsequently changes, the oblivious agent will not do anything. It needs to receive a 'force-need-update' message to change state to {:value nil :status :needs-update}. After that, it behaves like a lazy agent until the next time it updates its value, at which point its status is reset to :oblivious.
 
