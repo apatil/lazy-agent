@@ -1,4 +1,4 @@
-lazy-agent : concurrent, lazy cells for Clojure
+lazy-agent : Concurrent, lazy cells for Clojure
 ===============================================
 
 Implements two types of agent-based 'cells' for Clojure: lazy cells and oblivious cells. Both update concurrently, with respectably efficient scheduling, and avoid unnecessarily repeating cell updates.
@@ -6,8 +6,10 @@ Implements two types of agent-based 'cells' for Clojure: lazy cells and obliviou
 Usage
 -----
 
-Lazy cells dependent on a ref can be created as follows::
+Lazy cells depending on a ref can be created as follows. Their update functions include a time delay to simulate long computation::
 
+    (defn sleeping [fun]
+        (fn [& x] (do (Thread/sleep 1000) (apply fun x))))
     (def x (ref 10))
     (def-cell a (sleeping /) [1 x])
     (def-cell b (sleeping +) [2 3])
@@ -31,24 +33,27 @@ To update a group of cells asynchronously, do::
 
     user=> (update a b) 
 
-To update and wait for the values, do:: 
+To update and wait for the values, do (note the concurrency, ``a`` and ``b`` take one second each to update):: 
 
-    user=> (evaluate a b)
+    user=> (time (evaluate a b))
+    "Elapsed time: 1005.231 msecs"
     (1/10 5)
     
-When a lazy cell's ancestor changes, its value changes to ``{:value nil :status :needs-update}`` but it does not compute its new value until it receives a message instructing it to do so::
+When a lazy cell's ancestor changes, its value changes to ``{:value nil :status :needs-update}``::
 
     user=> (dosync (ref-set x 11))
     11
     user=> @a
     {:val nil, :status :needs-update}
+    
+It does not compute its new value until it receives a message instructing it to do so.
 
 Lazy cells are guaranteed to update only once per 'update' or 'evaluate' call. They will not update until all of their parents are up-to-date.
 
 Oblivious cells
 ----------------
 
-Oblivious cells can be created by passing an optional argument to ``def-cell``. When such an cell is up-to-date, its status is ``:oblivious``::
+Oblivious cells can be created by passing an optional argument to ``def-cell``. ``:oblivious``::
 
     (def x (ref 10))
     (def-cell a (sleeping /) [1 x])
@@ -57,7 +62,8 @@ Oblivious cells can be created by passing an optional argument to ``def-cell``. 
 
 Oblivious cells are even lazier than lazy cells. If an ancestor subsequently changes, the cell will not do anything:: 
 
-    user=> (evaluate a b c)
+    user=> (time (evaluate a b c))
+    "Elapsed time: 2008.252 msecs"
     (1/10 5 51/10)
     user=> (dosync (ref-set x 11))
     11
@@ -90,7 +96,8 @@ If a cell encounters an exception when computing, that exception is recorded in 
     (def-cell c (sleeping +) [a b] true)
     (def-cell d (sleeping +) [c a 3])
     
-    user=> (evaluate a b c d)
+    user=> (time (evaluate a b c d))
+    "Elapsed time: 3007.395 msecs"
     (1/10 5 51/10 41/5)
     user=> (dosync (ref-set x 0))
     0
