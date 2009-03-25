@@ -102,6 +102,25 @@
                 (map-now #(send % needs-update-m % c) (cm-children m))
                 ; Then set the cell's status to needs-update
                 (with-meta needs-update-val m)))))
+                
+(defn recovery-m [v p]
+    "Message sent when a parent goes from the error state to the needs-update state."
+    ; If the cell is not in an error state (if it is oblivious or the recovery 
+    ; has already been noted), do nothing.
+    (if (not (error? v)) 
+        v
+        (let [new-v (assoc v :val (dissoc (cv-val v) p)) 
+                m (meta v)]
+            (if (not ((cv-val v) p))
+                ; If the recovery has already been noted, do nothing.
+                new-v
+                (do
+                    ; Propagate the recovery message to children.
+                    (map-now #(send % recovery-m p) (cm-children m))
+                    ; If no ancestral errors remain, leave the error state.
+                    (if (empty? (cv-val new-v)) 
+                        (with-meta needs-update-val m) 
+                        new-v))))))
 
 
 (defn update-m [v c p new-pv] 
@@ -171,25 +190,6 @@
                         ; error incorporate the new parent value.
                         (assoc new-v :val (assoc (cv-val new-v) p err)))
                 (with-meta (struct cv {p err} :error) m))))))
-            
-(defn recovery-m [v p]
-    "Message sent when a parent goes from the error state to the needs-update state."
-    ; If the cell is not in an error state (if it is oblivious or the recovery 
-    ; has already been noted), do nothing.
-    (if (not (error? v)) 
-        v
-        (let [new-v (assoc v :val (dissoc (cv-val v) p)) 
-                m (meta v)]
-            (if (not ((cv-val v) p))
-                ; If the recovery has already been noted, do nothing.
-                new-v
-                (do
-                    ; Propagate the recovery message to children.
-                    (map-now #(send % recovery-m p) (cm-children m))
-                    ; If no ancestral errors remain, leave the error state.
-                    (if (empty? (cv-val new-v)) 
-                        (with-meta needs-update-val m) 
-                        new-v))))))
                                         
 ; ================================================
 ; = Updating functions to be called by the user. =
