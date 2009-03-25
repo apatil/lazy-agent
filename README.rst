@@ -9,16 +9,16 @@ Usage
 
 Lazy cells dependent on a ref can be created as follows::
 
-(def x (ref 10))
-(def-cell a (sleeping /) [1 x])
-(def-cell b (sleeping +) [2 3])
+    (def x (ref 10))
+    (def-cell a (sleeping /) [1 x])
+    (def-cell b (sleeping +) [2 3])
 
 If you deref a lazy cell, you'll see a map::
 
-user=> @a
-{:val nil, :status :needs-update}
-user=> @b
-{:val nil, :status :needs-update}
+    user=> @a
+    {:val nil, :status :needs-update}
+    user=> @b
+    {:val nil, :status :needs-update}
 
 ``:status`` may be: 
 
