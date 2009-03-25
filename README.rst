@@ -1,4 +1,6 @@
-lazy-agent.clj
+lazy-agent : concurrent, lazy cells for Clojure.
+========================
+
 Anand Patil
 February 25, 2009
 Creative Commons BY-SA, see LICENSE
