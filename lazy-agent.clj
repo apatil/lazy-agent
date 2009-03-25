@@ -75,18 +75,18 @@
                     (recur rest-parents (cons (parent-v-map parent) v-sofar))
                     ; Otherwise, cons the parent.
                     (recur rest-parents (cons parent v-sofar)))))))
-        
+
 (defn record-la-parent-v [m pv-map p pv]
     "Utility function that incorporates updated ps into a cell's
     p v ref." 
-    (assoc m :id-parent-vals (assoc pv-map p (cv-val pv))))
+    (assoc m :id-parent-vals (assoc pv-map p pv)))
 
 (defn forget-la-parent-v [m pv-map p]
     "Utility function that incorporates updated ps into a cell's
     p v ref." 
     (assoc m :id-parent-vals (dissoc pv-map p)))
 
-(defn update-m [v p new-pv] 
+(defn update-m [v c p new-pv] 
     "Message sent when a parent computes."
     (let [old-m (meta v)
         old-pv-map (cm-id-parent-vals old-m)
@@ -101,7 +101,9 @@
                     new-v)
             ; If previously up-to-date, revert to needs-update
             (up-to-date? new-v)
-                (with-meta needs-update-val m)
+                (do
+                    (map-now #(send % needs-update-m % c) (cm-children m))
+                    (with-meta needs-update-val m))
             ; Otherwise (cell is in error, oblivious or needs-update) do nothing.
             true
                 new-v)))
@@ -196,7 +198,7 @@
                 (map-now 
                     (if (error? old-v) 
                         #(send % recovery-m c) 
-                        #(send % update-m c new-v)) 
+                        #(send % update-m % c (cv-val new-v))) 
                     children)
                 new-v)))))
 
@@ -235,8 +237,10 @@
         (if (not status) 
             true 
             (= status :up-to-date))))
+
 (defn extract-val [x] (let [v (:val x)] (if v v x)))
 (def extract-cv (comp extract-val deref))
+
 (defn add-child-msg [v c]
     (let [old-meta (meta v)
         children (cm-children old-meta)
@@ -254,9 +258,13 @@
             new-v (struct cv (apply update-fn new-parents) new-status)] 
             (do
                 ; Send compute message to children.
-                (map-now #(send % update-m c new-v) children)
+                (map-now #(send % update-m % c (cv-val new-v)) children)
                 ; Create new v, preserving metadata, and put cell in either up-to-date or oblivious state.
                 (with-meta new-v m)))))
+
+(defn non-la-parent-watcher [c p old-val new-v]
+    "Watches non-lazy-agent id parents for changes."
+    (send c update-m c p new-v))
         
 (defn cell [name update-fn parents & [oblivious?]]
     "Creates a cell (lazy auto-agent) with given update-fn and parents."
@@ -269,9 +277,11 @@
         id-parent-vals (zipmap updated-parents (map extract-cv updated-parents))
         cell (agent (with-meta
             needs-update-val
-                (struct cm la-parents id-parent-vals n-id-parents parents #{} nil oblivious? true)))]
+                (struct cm la-parents id-parent-vals n-id-parents parents #{} nil oblivious? true)))
+        watcher-adder (fn [id] (add-watch id cell non-la-parent-watcher))]
         (do
             (map-now #(send % add-child-msg cell) la-parents)
+            (map-now watcher-adder non-la-parents)
             (send cell 
                 #(with-meta % 
                     (assoc (meta %) :fn (update-wrap cell update-fn (if oblivious? :oblivious :up-to-date))))))))        
