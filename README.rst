@@ -1,8 +1,7 @@
 lazy-agent : concurrent, lazy cells for Clojure
 ===============================================
 
-Implements two types of agent-based 'cells' for Clojure: lazy cells and oblivious cells. These complement the auto-agents available in Clojure Contrib. Both allow for concurrent cell updates with respectably efficient scheduling and avoid unnecessarily repeating cell updates.
-
+Implements two types of agent-based 'cells' for Clojure: lazy cells and oblivious cells. Both update concurrently, with respectably efficient scheduling, and avoid unnecessarily repeating cell updates.
 
 Usage
 -----
@@ -20,7 +19,7 @@ If you deref a lazy cell, you'll see a map::
     user=> @b
     {:val nil, :status :needs-update}
 
-``:status`` may be: 
+The key ``:val`` gives the value of the cell, if it is available. ``:status`` may be: 
 
 * ``:needs-update``
 * ``:updating``
@@ -28,27 +27,95 @@ If you deref a lazy cell, you'll see a map::
 * ``:error`` or
 * ``:oblivious``
 
-If a cell is up-to-date or oblivious, ``:value`` gives the value of the cell.
+To update a group of cells asynchronously, do:: 
 
-When a lazy cell's ancestor changes, its value changes to ``{:value nil :status :needs-update}`` but it does not compute its new value until it receives a message instructing it to do so. To send the update message to a group of cells, do:: 
+    user=> (update a b) 
 
-(update a b c d e) 
+To update and wait for the values, do:: 
 
-To send the update message and wait for the values, do:: 
+    user=> (evaluate a b)
+    (1/10 5)
+    
+When a lazy cell's ancestor changes, its value changes to ``{:value nil :status :needs-update}`` but it does not compute its new value until it receives a message instructing it to do so::
 
-(evaluate a b c d e)
+    user=> (dosync (ref-set x 11))
+    11
+    user=> @a
+    {:val nil, :status :needs-update}
 
 Lazy cells are guaranteed to update only once per 'update' or 'evaluate' call. They will not update until all of their parents are up-to-date.
 
 Oblivious cells
 ----------------
 
-Oblivious cells can be created by passing an optional argument to ``def-cell``. When such an cell is up-to-date, its status is ``:oblivious``. 
+Oblivious cells can be created by passing an optional argument to ``def-cell``. When such an cell is up-to-date, its status is ``:oblivious``::
 
-Oblivious cells are even lazier than lazy cells. If an ancestor subsequently changes, the cell will not do anything. It needs to receive a ``force-need-update`` message to change state to ``{:value nil :status :needs-update}``. After that, it behaves like a lazy cell until the next time it updates its value, at which point its status is reset to ``:oblivious``.
+    (def x (ref 10))
+    (def-cell a (sleeping /) [1 x])
+    (def-cell b (sleeping +) [2 3])
+    (def-cell c (sleeping +) [a b] true)
 
+Oblivious cells are even lazier than lazy cells. If an ancestor subsequently changes, the cell will not do anything:: 
 
+    user=> (evaluate a b c)
+    (1/10 5 51/10)
+    user=> (dosync (ref-set x 11))
+    11
+    user=> @a
+    {:val nil, :status :needs-update}
+    user=> @c
+    {:val 51/10, :status :oblivious}
+    user=> (evaluate a)
+    (1/11)
+    user=> @c
+    {:val 51/10, :status :oblivious}
+    
+It needs to receive a ``force-need-update`` message to change state to ``{:value nil :status :needs-update}``. After that, it behaves like a lazy cell until the next time it updates its value, at which point its status is reset to ``:oblivious``::
 
+    user=> (force-needs-update c)
+    nil
+    user=> @c
+    {:val nil, :status :needs-update}
+    user=> (evaluate c)
+    (56/11)
+
+Exceptions
+----------
+
+If a cell encounters an exception when computing, that exception is recorded in its value and propagated to all its descendants::
+
+    (def x (ref 10))
+    (def-cell a (sleeping /) [1 x])
+    (def-cell b (sleeping +) [2 3])
+    (def-cell c (sleeping +) [a b] true)
+    (def-cell d (sleeping +) [c a 3])
+    
+    user=> (evaluate a b c d)
+    (1/10 5 51/10 41/5)
+    user=> (dosync (ref-set x 0))
+    0
+    user=> (evaluate a d)  
+    ({:self #<ArithmeticException java.lang.ArithmeticException: Divide by zero>} {#<Agent@85e41d: {:val {:self #<ArithmeticException java.lang.ArithmeticException: Divide by zero>}, :status :error}> #<ArithmeticException java.lang.ArithmeticException: Divide by zero>})
+
+Oblivious descendants ignore the exception::
+
+    user=> @c
+    {:val 51/10, :status :oblivious}
+
+Exceptions are automatically cleared when possible::
+
+    user=> (dosync (ref-set x 2)) 
+    2
+    user=> @a
+    {:val nil, :status :needs-update}
+    user=> @b
+    {:val 5, :status :up-to-date}
+    user=> @c
+    {:val 51/10, :status :oblivious}
+    user=> @d
+    {:val nil, :status :needs-update}
+    user=> (evaluate a d)
+    (1/2 43/5)
 
 Author
 ------
