@@ -8,7 +8,7 @@
 ;(defn sleeping [fun] fun)
 
 (def x (agent 10))
-(def-cell a (sleeping +) [1 x])
+(def-cell a (sleeping /) [1 x])
 (def-cell b (sleeping +) [2 3])
 (def-cell c (sleeping +) [a b] true)
 (def-cell d (sleeping +) [c a 3])

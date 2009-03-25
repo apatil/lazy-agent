@@ -86,6 +86,24 @@
     p v ref." 
     (assoc m :id-parent-vals (dissoc pv-map p)))
 
+(defn needs-update-m [v c p]
+    "Message sent when a parent goes into the needs-update state."
+    ; Drop the parent from the parent value map if necessary.
+    (let [old-m (meta v)
+        old-pv-map (cm-id-parent-vals old-m)
+        m (forget-la-parent-v old-m old-pv-map p)
+        new-v (with-meta v m)]
+        ; If the cell is not up-to-date (oblivious, updating, needing an update, or in error)
+        ; do nothing.
+        (if (not (up-to-date? new-v)) 
+            new-v
+            (do
+                ; First propagate the needs-update message to its children,
+                (map-now #(send % needs-update-m % c) (cm-children m))
+                ; Then set the cell's status to needs-update
+                (with-meta needs-update-val m)))))
+
+
 (defn update-m [v c p new-pv] 
     "Message sent when a parent computes."
     (let [old-m (meta v)
@@ -94,6 +112,13 @@
         new-v (with-meta v m)
         pv-map (cm-id-parent-vals m)] 
         (cond
+            ; If in error, and error originates in self, recover.
+            (error? new-v)
+                (if (and (= (count (cv-val new-v)) 1) (:self (cv-val new-v)))
+                    (do
+                        (map-now #(send % recovery-m c) (cm-children m))
+                        (with-meta needs-update-val m))
+                    new-v)
             ; If updating, try to compute
             (updating? new-v)
                 (if (= (cm-n-id-parents m) (count pv-map))
@@ -104,7 +129,7 @@
                 (do
                     (map-now #(send % needs-update-m % c) (cm-children m))
                     (with-meta needs-update-val m))
-            ; Otherwise (cell is in error, oblivious or needs-update) do nothing.
+            ; Otherwise (cell is oblivious or needs-update) do nothing.
             true
                 new-v)))
             
@@ -165,24 +190,7 @@
                     (if (empty? (cv-val new-v)) 
                         (with-meta needs-update-val m) 
                         new-v))))))
-
-(defn needs-update-m [v c p]
-    "Message sent when a parent goes into the needs-update state."
-    ; Drop the parent from the parent value map if necessary.
-    (let [old-m (meta v)
-        old-pv-map (cm-id-parent-vals old-m)
-        m (forget-la-parent-v old-m old-pv-map p)
-        new-v (with-meta v m)]
-        ; If the cell is not up-to-date (oblivious, updating, needing an update, or in error)
-        ; do nothing.
-        (if (not (up-to-date? new-v)) 
-            new-v
-            (do
-                ; First propagate the needs-update message to its children,
-                (map-now #(send % needs-update-m % c) (cm-children m))
-                ; Then set the cell's status to needs-update
-                (with-meta needs-update-val m)))))
-                
+                                        
 ; ================================================
 ; = Updating functions to be called by the user. =
 ; ================================================
@@ -254,13 +262,18 @@
     (fn [v m id-parent-vals]
         (let [parents (cm-parents m)
             new-parents (complete-parents id-parent-vals parents)
-            children (cm-children m)
-            new-v (struct cv (apply update-fn new-parents) new-status)] 
-            (do
-                ; Send compute message to children.
-                (map-now #(send % update-m % c (cv-val new-v)) children)
-                ; Create new v, preserving metadata, and put cell in either up-to-date or oblivious state.
-                (with-meta new-v m)))))
+            children (cm-children m)] 
+            (try
+                (let [new-v (struct cv (apply update-fn new-parents) new-status)]
+                    (do
+                        ; Send compute message to children.
+                        (map-now #(send % update-m % c (cv-val new-v)) children)
+                        ; Create new v, preserving metadata, and put cell in either up-to-date or oblivious state.
+                        (with-meta new-v m)))
+                (catch Exception err
+                    (do
+                        (map-now #(send % error-m c err) children)
+                        (with-meta (struct cv {:self err} :error) m)))))))
 
 (defn non-la-parent-watcher [c p old-val new-v]
     "Watches non-lazy-agent id parents for changes."
