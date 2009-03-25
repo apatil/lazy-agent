@@ -6,13 +6,6 @@
 ; Good reference on scheduling: Scheduling and Automatic Parallelization.
 ; Chapter 1 covers scheduling in DAGs and is available free on Google Books.
 
-; TODO: Eliminate parent-recording repetition with macros.
-; TODO: Search for idiomatic equivalent to map-now-over-first etc.
-; TODO: Need to handle non-lazy-agent parents with watchers that dispatch messages as needed. Again.
-
-; TODO: Make a fn analogous to synchronize that adds a watcher with a specified action to cells, which waits till they compute and then dispatches the action with the cells' vals.
-
-
 (set! *warn-on-reflection* true)
 
 ; ==================================================
@@ -98,92 +91,94 @@
     (assoc m :id-parent-vals (dissoc pv-map p)))
 
 ; TODO: These next two need to be mutually referential.
-(defn compute-m [v p new-pv] 
-    "Message sent when a parent computes."
-    (let [old-m (meta v)
-        old-pv-map (cm-id-parent-vals old-m)
-        m (record-la-parent-v v old-m old-pv-map p new-pv)
-        new-v (with-meta v m)
-        pv-map (cm-id-parent-vals m)]
-        ; If oblivious, do nothing
-        (if (oblvious? new-v) 
-            new-v
-            ; If updating, try to compute
-            (if (updating? new-v)
-                (if (= (cm-n-id-parent-vals m) (count pv-map)
-                    (compute-cv new-v m pv-map c))))
-                new-v
-            ; Otherwise do nothing.
-            new-v)))
-
-(defn compute-cv [v m id-parent-vals c]
-    "Can be sent to a cell when its id-parent-vals are complete to compute its v."
-    (let [parents (cm-parents m)
-        update-fn (cm-fn m)
-        new-parents (complete-parents id-parent-vals parents)
-        new-v (apply update-fn new-parents)
-        new-status (if (cm-oblivious? m) :oblivious :up-to-date)
-        children (cm-children m)] 
-        (do
-            ; Send compute message to children.
-            (map-now-over-first compute-m children c new-v)
-            ; Create new v, preserving metadata, and put cell in either up-to-date or oblivious state.
-            (with-meta (struct cv new-v new-status) m))))
-
-(defn update-request-m [v c]
-    "Message sent to put a cell in the updating state."
-    ; If the cell is not in the needs-update state, do nothing.
-    (if (needs-update? v)
-        (let [m (meta v)
-                pv-map (cm-id-parent-vals m)]
-            (do
-                ; Propagate update request to parents.
-                (map-now-with-first update-request-m (cm-la-parents (meta v)))
-                ; Compute if possible.
-                (if (= (count pv-map) (cm-num-id-parents m))
-                    ; Compute if possible
-                    (compute-cv v m pv-map c)
-                    ; Otherwise put cell into the updating status.
-                    (assoc v :status :updating)))
-        v))
+;(defn compute-m [v p new-pv] 
+;    "Message sent when a parent computes."
+;    (let [old-m (meta v)
+;        old-pv-map (cm-id-parent-vals old-m)
+;        m (record-la-parent-v v old-m old-pv-map p new-pv)
+;        new-v (with-meta v m)
+;        pv-map (cm-id-parent-vals m)]
+;        ; If oblivious, do nothing
+;        (if (oblivious? new-v) 
+;            new-v
+;            ; If updating, try to compute
+;            (if (updating? new-v)
+;                (if (= (cm-n-id-parents m) (count pv-map))
+;                    (compute-cv new-v m pv-map c)
+;                    new-v)
+;                ; Otherwise do nothing.
+;                new-v))))
+;
+;(defn compute-cv [v m id-parent-vals c]
+;    "Can be sent to a cell when its id-parent-vals are complete to compute its v."
+;    (let [parents (cm-parents m)
+;        update-fn (cm-fn m)
+;        new-parents (complete-parents id-parent-vals parents)
+;        new-v (apply update-fn new-parents)
+;        new-status (if (cm-oblivious? m) :oblivious :up-to-date)
+;        children (cm-children m)] 
+;        (do
+;            ; Send compute message to children.
+;            (map-now-over-first compute-m children c new-v)
+;            ; Create new v, preserving metadata, and put cell in either up-to-date or oblivious state.
+;            (with-meta (struct cv new-v new-status) m))))
+;
+;(defn update-request-m [v c]
+;    "Message sent to put a cell in the updating state."
+;    ; If the cell is not in the needs-update state, do nothing.
+;    (if (needs-update? v)
+;        (let [m (meta v)
+;                pv-map (cm-id-parent-vals m)]
+;            (do
+;                ; Propagate update request to parents.
+;                (map-now-with-first update-request-m (cm-la-parents (meta v)))
+;                ; Compute if possible.
+;                (if (= (count pv-map) (cm-num-id-parents m))
+;                    ; Compute if possible
+;                    (compute-cv v m pv-map c)
+;                    ; Otherwise put cell into the updating status.
+;                    (assoc v :status :updating)))
+;        v)))
     
 (defn error-m [v p err]
     "Message sent when a parent enters the error state."
     ; Drop the parent from the parent value map if necessary.
     (let [old-m (meta v)
-        old-pv-map (cm-id-parent-vals old-m)
-        m (forget-la-parent-v v old-m old-pv-map p)
-        new-v (with-meta v m)]
+            old-pv-map (cm-id-parent-vals old-m)
+            m old-m
+            m (forget-la-parent-v old-m old-pv-map p)
+            new-v (with-meta v m)]
         ; If the cell is oblivious, do nothing.
-        (if (oblvious? new-v) 
+        (if (oblivious? new-v) 
             new-v
-            (if (error? new-v)
+            (do
+                ; If the cell is non-oblivious, first propagate the error message to its children,
+                (map-now #(send % error-m p err) (cm-children m))
+                (if (error? new-v)
                 ; If the error is already known, do nothing.
                 (if (= ((cv-val new-v) p) err)
                     new-v
-                    (do
-                        ; If the cell is non-oblivious, first propagate the error message to its children,
-                        (map-now-over-first error-m (cm-children m) p err)
-                        ; If the cell is non-oblivious, either set its status to error or if it is already
-                        ; error incorporate the new parent value.
-                        (assoc new-v :val (assoc (cv-val new-v) p err))))
-                (struct cv {p err} :error)))))
+                    ; If the cell is non-oblivious, either set its status to error or if it is already
+                    ; error incorporate the new parent value.
+                    (assoc new-v :val (assoc (cv-val new-v) p err)))
+                (with-meta (struct cv {p err} :error) m))))))
             
 (defn recovery-m [v p]
     "Message sent when a parent goes from the error state to the needs-update state."
     ; If the cell is not in an error state (if it is oblivious or the recovery 
     ; has already been noted), do nothing.
-    (if (not error? v) 
+    (if (not (error? v)) 
         v
-        (let [new-v (assoc v :val (dissoc cv-val p)) m (meta v)]
-            (if (not (cv-val new-v p))
+        (let [new-v (assoc v :val (dissoc (cv-val v) p)) 
+                m (meta v)]
+            (if (not ((cv-val v) p))
                 ; If the recovery has already been noted, do nothing.
                 new-v
                 (do
                     ; Propagate the recovery message to children.
-                    (map-now-over-first recovery-m (cm-children m) p)
+                    (map-now #(send % recovery-m p) (cm-children m))
                     ; If no ancestral errors remain, leave the error state.
-                    (if (empty? new-v) 
+                    (if (empty? (cv-val new-v)) 
                         (with-meta needs-update-val m) 
                         new-v))))))
 
@@ -192,7 +187,7 @@
     ; Drop the parent from the parent value map if necessary.
     (let [old-m (meta v)
         old-pv-map (cm-id-parent-vals old-m)
-        m (forget-la-parent-v v old-m old-pv-map p)
+        m (forget-la-parent-v old-m old-pv-map p)
         new-v (with-meta v m)]
         ; If the cell is not up-to-date (oblivious, updating, needing an update, or in error)
         ; do nothing.
@@ -200,7 +195,7 @@
             new-v
             (do
                 ; First propagate the needs-update message to its children,
-                (map-now-with-first needs-update-m (cm-children m) c)
+                (map-now #(send % needs-update-m % c) (cm-children m))
                 ; Then set the cell's status to needs-update
                 (with-meta needs-update-val m)))))
                 
@@ -209,35 +204,43 @@
 ; = Updating functions to be called by the user. =
 ; ================================================
 
-(defn set-cell! [c v] 
-    "Sets a cell's val to v, and sets its status to either :updated or :oblivious as appropriate."
-    (send c 
-        (fn [old-v] (let [updated-status (if (inherently-oblivious? old-v) :oblivious :up-to-date)
-                            old-meta (meta old-v)
-                            children (cm-children old-meta)
-                            new-v (with-meta (struct cv v updated-status) old-meta)]
-            (do 
-                ; If switching from error state, send recovery message
-                (if (error? old-v) (map-now-over-first recovery-m children c))
-                ; Send compute message
-                (map-now-with-first compute-m children c v)
-                new-val)))))
+;(defn set-cell! [c v] 
+;    "Sets a cell's val to v, and sets its status to either :updated or :oblivious as appropriate."
+;    (send c 
+;        (fn [old-v] (let [updated-status (if (inherently-oblivious? old-v) :oblivious :up-to-date)
+;                            old-meta (meta old-v)
+;                            children (cm-children old-meta)
+;                            new-v (with-meta (struct cv v updated-status) old-meta)]
+;            (do 
+;                ; If switching from error state, send recovery message
+;                (if (error? old-v) (map-now-over-first recovery-m children c))
+;                ; Send compute message
+;                (map-now-with-first compute-m children c v)
+;                new-v)))))
 
 (defn force-needs-update [c] "Utility function that puts p into the needs-update state, even if p is oblivious." 
     (send c 
-        #(with-meta needs-update-val (child-msgs % (meta %)))))
-
-(defn update [c] "Utility function that puts p into the updating state if it needs an update." 
-    (send c 
-        #(if (needs-update? %) (update-request-m %) %)))
-
+        (fn [v] (let [m (meta v)
+                        new-v (with-meta needs-update-val m)
+                        children (cm-children m)]
+            (do
+                (map-now (if (error? v) #(send % recovery-m c) #(send % needs-update-m % c))
+                    children)
+                new-v)))))
+;
+;(defn update [c] "Utility function that puts p into the updating state if it needs an update." 
+;    (send c 
+;        #(if (needs-update? %) (update-request-m %) %)))
+;
 (defn force-error [c] "Puts the cell into the error state." 
     (send c 
-        (fn [v] (let [old-meta (meta v)
-                        new-v (with-meta (struct cv (Error.) :error) old-meta)
-                        children (cm-children old-meta)])
+        (fn [v] (let [m (meta v)
+                        new-v (with-meta (struct cv {:self (Error.)} :error) m)
+                        children (cm-children m)
+                        err (cv-val new-v)]
             (do
-                (map-now (error-m c (cv-val new-v))) children))))
+                (map-now #(send % error-m c err) children) 
+                new-v)))))
 
 
 ; =======================
@@ -251,18 +254,29 @@
             (= status :up-to-date))))
 (defn extract-val [x] (let [v (:val x)] (if v v x)))
 (def extract-cv (comp extract-val deref))
+(defn add-child-msg [v c]
+    (let [old-meta (meta v)
+        children (cm-children old-meta)
+        new-children (conj children c)
+        new-meta (assoc old-meta :children new-children)]
+        (with-meta v new-meta)))
+        
 (defn cell [name update-fn parents & [oblivious?]]
     "Creates a cell (lazy auto-agent) with given update-fn and parents."
     (let [parents (vec parents)
         id-parents (set (filter id? parents))
         non-la-parents (filter (comp not is-lazy-agent?) id-parents)
+        la-parents (filter is-lazy-agent? id-parents) 
         n-id-parents (count id-parents)
         agent-parents (set (filter agent? id-parents))
         updated-parents (filter updated? id-parents)          
-        id-parent-vals (zipmap updated-parents (map extract-cv updated-parents))]
-        (agent (with-meta
-                needs-update-val
-                    (struct cm agent-parents id-parent-vals n-id-parents parents #{} update-fn oblivious? true)))))        
+        id-parent-vals (zipmap updated-parents (map extract-cv updated-parents))
+        cell (agent (with-meta
+            needs-update-val
+                (struct cm agent-parents id-parent-vals n-id-parents parents #{} update-fn oblivious? true)))]
+        (do
+            (map-now #(send % add-child-msg cell) la-parents)
+            cell)))        
 
 (defmacro def-cell
     "Creates and inters a cell in the current namespace, bound to sym,
@@ -270,51 +284,51 @@
     [sym update-fn parents & [oblivious?]] 
     `(def ~sym (cell ~(name sym) ~update-fn ~parents ~oblivious?)))
 
-; =======================================
-; = Synchronized multi-cell evaluations =
-; =======================================
-(defn not-waiting? [cv] 
-    "Determines whether a cell is either up-to-date or oblivious."
-    (let [status (cv-status cv)]
-        (or 
-            (= :up-to-date status) 
-            (= :oblivious status))))
+;; =======================================
+;; = Synchronized multi-cell evaluations =
+;; =======================================
+;(defn not-waiting? [cv] 
+;    "Determines whether a cell is either up-to-date or oblivious."
+;    (let [status (cv-status cv)]
+;        (or 
+;            (= :up-to-date status) 
+;            (= :oblivious status))))
+;
+;(defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell old-val new-val]
+;    "A watcher function that decrements a latch when a cell updates."
+;    (do
+;        (if (not= old-val new-val)
+;            (if (not-waiting? new-val)
+;                (.countDown latch)))
+;            latch))
+;
+;(def cell-waiting? (comp not not-waiting? deref))
+;(defn evaluate [& cells]
+;    "Updates the cells, waits for them to compute, and returns their vals."
+;    (let [        
+;          latch (java.util.concurrent.CountDownLatch. (count (filter cell-waiting? cells)))
+;          watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
+;          watcher-remover (fn [cell] (remove-watch cell latch))]
+;        (do
+;            (map-now watcher-adder cells)            
+;            (apply update cells)             
+;            (.await latch)
+;            (map-now watcher-remover cells)
+;            (map deref-cell cells))))
 
-(defn unlatching-watcher [#^java.util.concurrent.CountDownLatch latch cell old-val new-val]
-    "A watcher function that decrements a latch when a cell updates."
-    (do
-        (if (not= old-val new-val)
-            (if (not-waiting? new-val)
-                (.countDown latch)))
-            latch))
-
-(def cell-waiting? (comp not not-waiting? deref))
-(defn evaluate [& cells]
-    "Updates the cells, waits for them to compute, and returns their vals."
-    (let [        
-          latch (java.util.concurrent.CountDownLatch. (count (filter cell-waiting? cells)))
-          watcher-adder (fn [cell] (add-watch cell latch unlatching-watcher))
-          watcher-remover (fn [cell] (remove-watch cell latch))]
-        (do
-            (map-now watcher-adder cells)            
-            (apply update cells)             
-            (.await latch)
-            (map-now watcher-remover cells)
-            (map deref-cell cells))))
-
-(defn force-update [& cells]
-    "Forces the cells to update and returns them immediately."
-    (do
-        (apply force-need-update cells)
-        (apply await cells)
-        (apply update cells)))
+;(defn force-update [& cells]
+;    "Forces the cells to update and returns them immediately."
+;    (do
+;        (apply force-need-update cells)
+;        (apply await cells)
+;        (apply update cells)))
                 
-(defn force-evaluate [& cells]
-    "Forces the cells to update, waits for them and returns their vals."
-    (do 
-        (apply force-need-update cells)
-        (apply await cells)
-        (apply evaluate cells)))
+;(defn force-evaluate [& cells]
+;    "Forces the cells to update, waits for them and returns their vals."
+;    (do 
+;        (apply force-need-update cells)
+;        (apply await cells)
+;        (apply evaluate cells)))
 
 ;; ============================
 ;; = Change cell dependencies =
