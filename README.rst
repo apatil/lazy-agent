@@ -1,10 +1,16 @@
-lazy-agent : concurrent, lazy cells for Clojure.
-========================
+lazy-agent : concurrent, lazy cells for Clojure
+===============================================
+
+Author
+------
 
 Anand Patil
-February 25, 2009
-Creative Commons BY-SA, see LICENSE
-copyright 2009 Anand Patil
+
+License
+-------
+
+Copyright (c) Anand Patil, 2009. Licensed under Creative Commons BY-SA, see LICENSE.
+
 
 
 Implements two types of agent-based 'cells' for Clojure: lazy agents and oblivious agents. These complement the auto-agents available in Clojure Contrib. Both allow for concurrent cell updates with respectably efficient scheduling and avoid unnecessarily repeating cell updates.

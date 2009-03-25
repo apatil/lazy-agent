@@ -11,7 +11,7 @@
 ; ==================================================
 ; = Utility stuff not immediately related to cells =
 ; ==================================================
-;(ns lazy-agent)
+(ns lazy-agent)
 
 (defmacro structmap-and-accessors [sym & fields]
     "Defunes a structmap with given symbol, and defines accessors for all its fields."
