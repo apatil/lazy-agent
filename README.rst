@@ -14,21 +14,6 @@ Lazy cells depending on a ref can be created as follows. Their update functions 
     (def-cell a (sleeping /) [1 x])
     (def-cell b (sleeping +) [2 3])
 
-If you deref a lazy cell, you'll see a map::
-
-    user=> @a
-    {:val nil, :status :needs-update}
-    user=> @b
-    {:val nil, :status :needs-update}
-
-The key ``:val`` gives the value of the cell, if it is available. ``:status`` may be: 
-
-* ``:needs-update``
-* ``:updating``
-* ``:up-to-date``
-* ``:error`` or
-* ``:oblivious``
-
 To update a group of cells asynchronously, do:: 
 
     user=> (update a b) 
@@ -38,6 +23,21 @@ To update and wait for the values, do (note the concurrency, ``a`` and ``b`` tak
     user=> (time (evaluate a b))
     "Elapsed time: 1005.231 msecs"
     (1/10 5)
+
+If you deref a lazy cell, you'll see a map::
+
+    user=> @a
+    {:val 1/10, :status :up-to-date}
+    user=> @b
+    {:val 5, :status :up-to-date}
+
+The key ``:val`` gives the value of the cell, if it is available. ``:status`` may be: 
+
+* ``:needs-update``
+* ``:updating``
+* ``:up-to-date``
+* ``:error`` or
+* ``:oblivious``
     
 When a lazy cell's ancestor changes, its value changes to ``{:value nil :status :needs-update}``::
 
