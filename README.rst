@@ -113,7 +113,7 @@ Exceptions are stored in maps to make it easy to figure out the cell in which th
     user=> ((@d :val) a)
     #<ArithmeticException java.lang.ArithmeticException: Divide by zero>
 
-Oblivious descendants ignore the exception::
+Oblivious descendants ignore exceptions in their ancestors::
 
     user=> @c
     {:val 51/10, :status :oblivious}
@@ -132,11 +132,7 @@ Exceptions are automatically cleared when possible::
     {:val nil, :status :needs-update}
     user=> (evaluate a d)
     (1/2 43/5)
-
-Author
-------
-
-Anand Patil
+    
 
 License
 -------
