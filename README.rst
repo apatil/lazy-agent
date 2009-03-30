@@ -136,14 +136,15 @@ Exceptions are automatically cleared when possible::
 Utility fns
 -----------
 
-*``(deref-cell cell)`` The value of the cell, without status information.
-*``(is-lazy-agent? x)`` Whether an object is a lazy cell.
-* Fns to test the status of cells:
-    *``(up-to-date? cell)``
-    *``(oblivious? cell)``
-    *``(updating? cell)``
-    *``(error? cell)``
-    *``(needs-update? cell)``
+* ``(deref-cell cell)`` The value of the cell, without status information.
+* ``(is-lazy-agent? x)`` Whether an object is a lazy cell.
+
+Fns to test the status of cells:
+* ``(up-to-date? cell)``
+* ``(oblivious? cell)``
+* ``(updating? cell)``
+* ``(error? cell)``
+* ``(needs-update? cell)``
 
 
 License
