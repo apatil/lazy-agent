@@ -140,6 +140,7 @@ Utility fns
 * ``(is-lazy-agent? x)`` Whether an object is a lazy cell.
 
 Fns to test the status of cells:
+
 * ``(up-to-date? cell)``
 * ``(oblivious? cell)``
 * ``(updating? cell)``
